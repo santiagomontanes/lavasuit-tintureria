@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir C:UsersUSERDesktoplavasuit *)",
+      "Bash(node -e \"require\\('./src/lib/orden.js'\\); require\\('./src/schemas/clientes.schema.js'\\); require\\('./src/controllers/clientes.controller.js'\\); require\\('./src/controllers/rutas.controller.js'\\); console.log\\('OK: modulos backend cargan sin errores de sintaxis'\\);\")",
+      "Bash(npx prisma *)",
+      "Bash(node *)",
+      "Bash(python *)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(Get-ChildItem -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Get-ChildItem)",
+      "Bash(Select-Object Name, PSIsContainer)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\USER\\\\Desktop\\\\lavasuit\" -Force | Where-Object { $_.PSIsContainer } | Select-Object -ExpandProperty Name)",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\USER\\\\Desktop\\\\lavasuit\" -Force | Where-Object { -not $_.PSIsContainer } | Select-Object -ExpandProperty Name)",
+      "PowerShell(head *)",
+      "Bash(npx expo *)",
+      "Bash(npx vite *)",
+      "Bash(npx prisma@5.22.0 validate)",
+      "Bash(echo \"exit=$?\")"
+    ]
+  }
+}

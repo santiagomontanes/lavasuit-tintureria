@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@config "../tailwind.config.js";
+@plugin "@tailwindcss/forms";
+@source "./**/*.{js,ts,jsx,tsx}";
+
+@layer base {
+  :root {
+    --bg:           248 250 252;
+    --surface:      255 255 255;
+    --surface-2:    241 245 249;
+    --surface-3:    226 232 240;
+
+    --fg:           15  23  42;
+    --fg-muted:     71  85 105;
+    --fg-subtle:   148 163 184;
+
+    --border:      226 232 240;
+    --border-strong: 203 213 225;
+
+    --ring:         6 182 212;
+  }
+
+  html, body, #root { height: 100%; }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at 20% 0%, rgb(236 254 255 / 0.75), transparent 30rem),
+      linear-gradient(180deg, #f8fafc 0%, #eef5f8 100%);
+    color: rgb(var(--fg));
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+  }
+
+  input, select, textarea {
+    color: rgb(var(--fg));
+  }
+
+  input::placeholder, textarea::placeholder {
+    color: rgb(148 163 184);
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+
+  *::-webkit-scrollbar          { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-thumb    { background: rgb(203 213 225); border-radius: 8px; }
+  *::-webkit-scrollbar-thumb:hover { background: rgb(148 163 184); }
+  *::-webkit-scrollbar-track    { background: transparent; }
+}
+
+/*
+ * .focus-ring — equivalente a `ring-2 ring-offset-2 ring-offset-white` con
+ * color primary-500. Escrito en CSS plano para evitar el bug de Tailwind v4
+ * con @apply + variantes (`focus-visible:`) sobre colores custom del config.
+ * Cambiar el color del foco = cambiar `--ring` en :root.
+ */
+.focus-ring {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: box-shadow 120ms ease-out;
+}
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px rgb(var(--ring));
+}

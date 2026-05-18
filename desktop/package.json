@@ -1,0 +1,81 @@
+{
+  "name": "lavasuit-desktop",
+  "version": "1.0.0",
+  "description": "LavaSuit administración - aplicación Windows",
+  "main": "electron/main.js",
+  "author": "LavaSuit",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
+    "build": "vite build && electron-builder",
+    "build:installer": "vite build && electron-builder --win",
+    "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.lavasuit.desktop",
+    "productName": "LavaSuit",
+    "copyright": "Copyright © 2026 LavaSuit",
+    "directories": {
+      "output": "dist/electron",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/renderer/**",
+      "electron/**"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "LavaSuit-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LavaSuit",
+      "installerLanguages": [
+        "es_ES"
+      ],
+      "deleteAppDataOnUninstall": false
+    }
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.100.1",
+    "axios": "^1.15.2",
+    "better-sqlite3": "^12.9.0",
+    "dayjs": "^1.11.20",
+    "lucide-react": "^1.9.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "socket.io-client": "^4.8.3",
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.11",
+    "@tailwindcss/postcss": "^4.3.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
+    "postcss": "^8.5.10",
+    "tailwindcss": "^4.2.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10",
+    "wait-on": "^9.0.5"
+  }
+}

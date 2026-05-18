@@ -1,0 +1,338 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Usuario {
+  id               String                  @id @default(uuid())
+  nombre           String                  @db.VarChar(100)
+  email            String                  @unique @db.VarChar(150)
+  password         String                  @db.VarChar(255)
+  rol              Rol                     @default(EMPLEADO)
+  activo           Boolean                 @default(true)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  pedidos          Pedido[]                @relation("PedidoCreador")
+  pedidosEliminados Pedido[]               @relation("PedidoEliminador")
+  clientesCreados  Cliente[]               @relation("ClienteCreador")
+  pagos            Pago[]                  @relation("PagoCobrador")
+  garantias        Garantia[]              @relation("GarantiaRegistradaPor")
+  cambiosEstado    PedidoEstadoHistorial[] @relation("EstadoCambiadoPor")
+  sesionesTrabajo  SesionTrabajo[]
+  clientesAsignados Cliente[]              @relation("ClienteAsignado")
+  cajaCierres      CajaCierre[]
+  cajaSesiones     CajaSesion[]
+  evidenciasEntrega EvidenciaEntrega[]
+  serviciosCreados Servicio[]              @relation("ServicioCreador")
+  serviciosEditados Servicio[]             @relation("ServicioEditor")
+}
+
+enum Rol {
+  ADMIN
+  EMPLEADO
+  CAJERO
+  RECOLECTOR
+}
+
+model Cliente {
+  id            String   @id @default(uuid())
+  nombre        String   @db.VarChar(100)
+  telefono      String   @unique @db.VarChar(20)
+  email         String?  @db.VarChar(150)
+  direccion     String?  @db.VarChar(255)
+  notas         String?  @db.Text
+  identificador String?  @db.VarChar(40)
+  ordenBase     Int?
+  subOrden      Int      @default(0)
+  sortKey       String?  @db.VarChar(40)
+  asignadoAId   String?
+  creadoPorId   String?
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  creadoPor     Usuario? @relation("ClienteCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  asignadoA     Usuario? @relation("ClienteAsignado", fields: [asignadoAId], references: [id], onDelete: SetNull)
+  pedidos       Pedido[]
+
+  @@unique([ordenBase, subOrden])
+  @@index([creadoPorId])
+  @@index([asignadoAId])
+  @@index([sortKey])
+}
+
+model Servicio {
+  id               String       @id @default(uuid())
+  nombre           String       @db.VarChar(100)
+  descripcion      String?      @db.Text
+  categoria        String?      @db.VarChar(60)
+  precio           Decimal      @db.Decimal(10, 2)
+  unidad           String       @default("prenda") @db.VarChar(30)
+  activo           Boolean      @default(true)
+  esPersonalizado  Boolean      @default(false)
+  creadoPorId      String?
+  actualizadoPorId String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  deletedAt        DateTime?
+  creadoPor        Usuario?     @relation("ServicioCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  actualizadoPor   Usuario?     @relation("ServicioEditor",  fields: [actualizadoPorId], references: [id], onDelete: SetNull)
+  items            PedidoItem[]
+
+  @@index([activo])
+  @@index([deletedAt])
+  @@index([categoria])
+}
+
+model Pedido {
+  id              String       @id @default(uuid())
+  numero          Int          @unique @default(autoincrement())
+  clienteId       String
+  usuarioId       String
+  sesionTrabajoId String?
+  estado          EstadoPedido @default(RECIBIDO)
+  total           Decimal      @db.Decimal(10, 2)
+  fechaEntrega    DateTime?
+  notas           String?      @db.Text
+  sincronizado    Boolean      @default(false)
+  eliminadoEn     DateTime?
+  eliminadoPorId  String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  cliente         Cliente      @relation(fields: [clienteId], references: [id])
+  usuario         Usuario      @relation("PedidoCreador", fields: [usuarioId], references: [id])
+  eliminadoPor    Usuario?     @relation("PedidoEliminador", fields: [eliminadoPorId], references: [id], onDelete: SetNull)
+  sesionTrabajo   SesionTrabajo? @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+  items           PedidoItem[]
+  pagos           Pago[]
+  garantias       Garantia[]
+  historialEstados PedidoEstadoHistorial[]
+  evidenciaEntrega EvidenciaEntrega?
+
+  @@index([eliminadoEn])
+  @@index([usuarioId])
+  @@index([sesionTrabajoId])
+  @@index([eliminadoPorId])
+}
+
+enum EstadoPedido {
+  RECIBIDO
+  EN_PROCESO
+  LISTO
+  ENTREGADO
+  CANCELADO
+}
+
+model PedidoItem {
+  id             String   @id @default(uuid())
+  pedidoId       String
+  servicioId     String
+  nombre         String?  @db.VarChar(120)
+  cantidad       Int
+  precio         Decimal  @db.Decimal(10, 2)
+  subtotal       Decimal  @db.Decimal(10, 2)
+  colorActual    String?  @db.VarChar(80)
+  colorDeseado   String?  @db.VarChar(80)
+  observaciones  String?  @db.Text
+  pedido         Pedido   @relation(fields: [pedidoId], references: [id])
+  servicio       Servicio @relation(fields: [servicioId], references: [id])
+  garantias      Garantia[]
+}
+
+model Pago {
+  id              String     @id @default(uuid())
+  pedidoId        String
+  usuarioId       String?
+  sesionTrabajoId String?
+  monto           Decimal    @db.Decimal(10, 2)
+  metodo          MetodoPago
+  createdAt       DateTime   @default(now())
+  pedido          Pedido     @relation(fields: [pedidoId], references: [id])
+  usuario         Usuario?   @relation("PagoCobrador", fields: [usuarioId], references: [id])
+  sesionTrabajo   SesionTrabajo? @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+
+  @@index([usuarioId])
+  @@index([sesionTrabajoId])
+}
+
+enum MetodoPago {
+  EFECTIVO
+  NEQUI
+  DAVIPLATA
+  TRANSFERENCIA
+  TARJETA
+  YAPE
+  PLIN
+  OTRO
+}
+
+model SyncOperation {
+  id               String   @id @default(uuid())
+  entityType       String   @db.VarChar(30)
+  entityId         String   @db.VarChar(36)
+  action           String   @db.VarChar(40)
+  clientMutationId String   @db.VarChar(80)
+  deviceId         String   @db.VarChar(80)
+  payloadHash      String?  @db.VarChar(64)
+  status           String   @default("COMPLETED") @db.VarChar(30)
+  createdOfflineAt DateTime?
+  createdAt        DateTime @default(now())
+
+  @@unique([clientMutationId, deviceId])
+  @@index([entityType, entityId])
+  @@index([deviceId])
+}
+
+model PedidoEstadoHistorial {
+  id           String       @id @default(uuid())
+  pedidoId     String
+  usuarioId    String?
+  estadoAnterior EstadoPedido?
+  estadoNuevo  EstadoPedido
+  createdAt    DateTime     @default(now())
+  pedido       Pedido       @relation(fields: [pedidoId], references: [id])
+  usuario      Usuario?     @relation("EstadoCambiadoPor", fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([pedidoId])
+  @@index([usuarioId])
+  @@index([createdAt])
+}
+
+model SesionTrabajo {
+  id             String              @id @default(uuid())
+  usuarioId      String
+  fechaInicio    DateTime            @default(now())
+  fechaFin       DateTime?
+  estado         EstadoSesionTrabajo @default(ABIERTA)
+  totalPedidos   Int                 @default(0)
+  totalPagado    Decimal             @default(0) @db.Decimal(10, 2)
+  observaciones  String?             @db.Text
+  usuario        Usuario             @relation(fields: [usuarioId], references: [id])
+  pedidos        Pedido[]
+  pagos          Pago[]
+  garantias      Garantia[]
+  cajaCierres    CajaCierre[]
+  cajaSesiones   CajaSesion[]
+  evidenciasEntrega EvidenciaEntrega[]
+
+  @@index([usuarioId, estado])
+  @@index([fechaInicio])
+}
+
+enum EstadoSesionTrabajo {
+  ABIERTA
+  CERRADA
+}
+
+model Garantia {
+  id              String          @id @default(uuid())
+  pedidoId        String
+  pedidoItemId    String?
+  usuarioId       String
+  sesionTrabajoId String?
+  descripcion     String          @db.Text
+  fotoUrl         String          @db.VarChar(255)
+  fotoPath        String          @db.VarChar(255)
+  estado          EstadoGarantia  @default(ABIERTA)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  pedido          Pedido          @relation(fields: [pedidoId], references: [id])
+  pedidoItem      PedidoItem?     @relation(fields: [pedidoItemId], references: [id], onDelete: SetNull)
+  usuario         Usuario         @relation("GarantiaRegistradaPor", fields: [usuarioId], references: [id])
+  sesionTrabajo   SesionTrabajo?  @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+
+  @@index([pedidoId])
+  @@index([pedidoItemId])
+  @@index([usuarioId])
+  @@index([sesionTrabajoId])
+  @@index([estado])
+  @@index([createdAt])
+}
+
+enum EstadoGarantia {
+  ABIERTA
+  EN_REVISION
+  RESUELTA
+  RECHAZADA
+}
+
+model CajaSesion {
+  id                  String             @id @default(uuid())
+  usuarioId           String
+  sesionTrabajoId     String?
+  fechaApertura       DateTime           @default(now())
+  fechaCierre         DateTime?
+  montoBase           Decimal            @default(0) @db.Decimal(10, 2)
+  observacionApertura String?            @db.Text
+
+  // Campos calculados y persistidos al cerrar
+  efectivoContado     Decimal?           @db.Decimal(10, 2)
+  totalEfectivo       Decimal?           @db.Decimal(10, 2)
+  totalTransferencia  Decimal?           @db.Decimal(10, 2)
+  totalTarjeta        Decimal?           @db.Decimal(10, 2)
+  totalOtro           Decimal?           @db.Decimal(10, 2)
+  totalRecibido       Decimal?           @db.Decimal(10, 2)
+  totalPendiente      Decimal?           @db.Decimal(10, 2)
+  efectivoEsperado    Decimal?           @db.Decimal(10, 2)
+  diferencia          Decimal?           @db.Decimal(10, 2)
+  observacionCierre   String?            @db.Text
+
+  estado              CajaSesionEstado   @default(ABIERTA)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  usuario             Usuario            @relation(fields: [usuarioId], references: [id])
+  sesionTrabajo       SesionTrabajo?     @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+
+  @@index([usuarioId, estado])
+  @@index([sesionTrabajoId])
+  @@index([fechaApertura])
+}
+
+enum CajaSesionEstado {
+  ABIERTA
+  CERRADA
+}
+
+model CajaCierre {
+  id                 String          @id @default(uuid())
+  usuarioId          String
+  sesionTrabajoId    String?
+  fecha              DateTime        @default(now())
+  totalRecibido      Decimal         @db.Decimal(10, 2)
+  totalEfectivo      Decimal         @default(0) @db.Decimal(10, 2)
+  totalTransferencia Decimal         @default(0) @db.Decimal(10, 2)
+  totalTarjeta       Decimal         @default(0) @db.Decimal(10, 2)
+  totalOtros         Decimal         @default(0) @db.Decimal(10, 2)
+  totalPendiente     Decimal         @default(0) @db.Decimal(10, 2)
+  costoManual        Decimal?        @db.Decimal(10, 2)
+  utilidad           Decimal?        @db.Decimal(10, 2)
+  observaciones      String?         @db.Text
+  createdAt          DateTime        @default(now())
+  usuario            Usuario         @relation(fields: [usuarioId], references: [id])
+  sesionTrabajo      SesionTrabajo?  @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+
+  @@index([usuarioId])
+  @@index([sesionTrabajoId])
+  @@index([fecha])
+}
+
+model EvidenciaEntrega {
+  id              String          @id @default(uuid())
+  pedidoId        String          @unique
+  usuarioId       String
+  sesionTrabajoId String?
+  fotoUrl         String          @db.VarChar(255)
+  fotoPath        String          @db.VarChar(255)
+  observacion     String?         @db.Text
+  createdAt       DateTime        @default(now())
+  pedido          Pedido          @relation(fields: [pedidoId], references: [id])
+  usuario         Usuario         @relation(fields: [usuarioId], references: [id])
+  sesionTrabajo   SesionTrabajo?  @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+
+  @@index([pedidoId])
+  @@index([usuarioId])
+}
