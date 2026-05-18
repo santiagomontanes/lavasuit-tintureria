@@ -1,10 +1,11 @@
 import React from 'react';
 import {
-  LayoutDashboard, ShoppingBag, Users, Package, LogOut, Sparkles, Route, Banknote, UserCog
+  LayoutDashboard, ShoppingBag, Users, Package, LogOut, Route, Banknote, UserCog
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
 import { useNavStore, View } from '../../store/nav.store';
 import { cn } from '../../lib/cn';
+import UpdateChecker from './UpdateChecker';
 
 interface Item {
   id:        View['kind'];
@@ -81,14 +82,8 @@ export default function Sidebar() {
       </nav>
 
       <div className="px-4 pb-4">
-        <div className="mb-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-primary-100">
-            <Sparkles size={14} className="text-primary-300" />
-            Sistema operativo
-          </div>
-          <p className="mt-1 text-xs leading-relaxed text-slate-400">
-            Pedidos, pagos y garantias sincronizados en tiempo real.
-          </p>
+        <div className="mb-3">
+          <UpdateChecker />
         </div>
 
         {usuario && (

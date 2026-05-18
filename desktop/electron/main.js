@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path     = require('path');
 const Database = require('better-sqlite3');
+const { setupUpdater } = require('./updater');
 
 const isDev = process.env.NODE_ENV === 'development';
 let db, mainWindow;
@@ -56,6 +57,7 @@ function createWindow() {
 app.whenReady().then(() => {
   initDatabase();
   createWindow();
+  setupUpdater({ mainWindow, ipcMain, app });
 });
 
 app.on('window-all-closed', () => {

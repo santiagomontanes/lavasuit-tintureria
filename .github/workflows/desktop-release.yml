@@ -1,0 +1,50 @@
+name: Desktop Release (Windows)
+
+on:
+  push:
+    tags:
+      - 'desktop-v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version a publicar (ej. 1.0.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply manual version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: npm version $env:VERSION --no-git-tag-version
+
+      - name: Build renderer
+        run: npx vite build
+
+      - name: Build and publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELECTRON_BUILDER_ALLOW_UNSUPPORTED_FROM_NPM: 'true'
+        run: npx electron-builder --win --publish always

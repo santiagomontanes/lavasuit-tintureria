@@ -1,9 +1,78 @@
-node_modules
+# ───── Dependencias ─────
+node_modules/
+**/node_modules/
+
+# ───── Variables de entorno y secretos ─────
 .env
-backend/.env
-mobile/.env
-desktop/.env
-android/local.properties
-dist
-build
-.expo
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# ───── Builds y artefactos ─────
+dist/
+build/
+desktop/dist/
+backend/dist/
+mobile/dist/
+
+# ───── Bases de datos locales / dumps ─────
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+database/*.sql
+database/*.bak
+backend/prisma/dev.db
+mobile/lavasuit.db
+
+# ───── Expo / React Native ─────
+.expo/
+.expo-shared/
+mobile/.expo/
+mobile/web-build/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/ios/build/
+mobile/ios/Pods/
+*.jks
+*.keystore
+google-services.json
+GoogleService-Info.plist
+
+# ───── EAS / Expo Updates ─────
+.eas-build-local-nodejs/
+mobile/.easignore
+mobile/eas-build-cache/
+
+# ───── Electron ─────
+desktop/release/
+desktop/out/
+
+# ───── Subidas y uploads ─────
+backend/public/uploads/
+backend/uploads/
+
+# ───── Logs ─────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ───── OS / IDE ─────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ───── Otros ─────
+coverage/
+*.tsbuildinfo
+.cache/
+errores/
