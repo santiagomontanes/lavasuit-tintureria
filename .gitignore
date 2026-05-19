@@ -76,3 +76,7 @@ coverage/
 *.tsbuildinfo
 .cache/
 errores/
+
+# ───── docs/build-pdf ─────
+docs/node_modules/
+docs/_tmp_pdf_source.html
