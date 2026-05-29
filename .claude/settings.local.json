@@ -18,7 +18,23 @@
       "Bash(npx expo *)",
       "Bash(npx vite *)",
       "Bash(npx prisma@5.22.0 validate)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(dir C:\\\\Users\\\\USER\\\\Desktop\\\\lavasuit\\\\backend /B)",
+      "Bash(findstr /V \"node_modules\")",
+      "PowerShell(Get-ChildItem 'C:\\\\Users\\\\USER\\\\Desktop\\\\lavasuit\\\\backend' -Force | Where-Object { $_.Name -ne 'node_modules' } | Select-Object Name, Mode)",
+      "PowerShell(Get-ChildItem 'C:\\\\Users\\\\USER\\\\Desktop\\\\lavasuit\\\\desktop' -Force | Where-Object { $_.Name -ne 'node_modules' } | Select-Object Name, Mode)",
+      "Bash(where.exe msedge *)",
+      "Bash(\"C:\\\\Program Files \\(x86\\)\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe\" --version)",
+      "Bash(npm --version)",
+      "Bash(git check-ignore *)",
+      "Bash(git submodule *)",
+      "Bash(npm run *)",
+      "Bash(break)",
+      "Bash(ls C:/Users/USER/Desktop/lavasuit/mobile/src)",
+      "Bash(ls C:/Users/USER/Desktop/lavasuit/mobile)",
+      "Bash(git stash *)",
+      "Bash(npx -y -p prisma@5.22.0 prisma validate --schema=C:/Users/USER/Desktop/lavasuit/backend/prisma/schema.prisma)",
+      "Bash(npm pkg *)"
     ]
   }
 }

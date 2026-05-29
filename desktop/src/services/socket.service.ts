@@ -16,7 +16,15 @@ export type EventName =
   | 'garantia-actualizada'
   | 'servicio-creado'
   | 'servicio-actualizado'
-  | 'servicio-eliminado';
+  | 'servicio-eliminado'
+  | 'servicios-importados'
+  | 'marca-creada'
+  | 'marca-actualizada'
+  | 'marca-eliminada'
+  | 'marcas-importadas'
+  | 'color-creado'
+  | 'color-actualizado'
+  | 'color-eliminado';
 
 type Handler = (data: any) => void;
 type ConnHandler = (connected: boolean) => void;
@@ -39,7 +47,15 @@ const listeners: Record<EventName, Handler[]> = {
   'garantia-actualizada': [],
   'servicio-creado':      [],
   'servicio-actualizado': [],
-  'servicio-eliminado':   []
+  'servicio-eliminado':   [],
+  'servicios-importados': [],
+  'marca-creada':         [],
+  'marca-actualizada':    [],
+  'marca-eliminada':      [],
+  'marcas-importadas':    [],
+  'color-creado':         [],
+  'color-actualizado':    [],
+  'color-eliminado':      []
 };
 const connListeners: ConnHandler[] = [];
 

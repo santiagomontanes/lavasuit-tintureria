@@ -55,33 +55,33 @@ export default function EmpleadoFormModal({ open, onClose, empleado }: Props) {
 
   const errNombre = nombre.trim().length === 0;
   const errEmail  = !emailValido(email);
-  const errPwd    = !editando ? password.length < 6 : (cambiarPwd && password.length < 6);
+  const errPwd    = !editando ? password.length < 8 : (cambiarPwd && password.length < 8);
   const valid     = !errNombre && !errEmail && !errPwd;
 
   const crearMutation = useMutation({
-    mutationFn: (data: any) => api.post('/empleados', data).then((r) => r.data),
+    mutationFn: (data: any) => api.post('/usuarios', data).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['empleados'] });
-      toast.show('Empleado creado correctamente', 'success');
+      toast.show('Usuario creado correctamente', 'success');
       onClose();
     },
-    onError: (e: any) => toast.show(e?.response?.data?.error || 'No se pudo crear el empleado', 'error')
+    onError: (e: any) => toast.show(e?.response?.data?.error || 'No se pudo crear el usuario', 'error')
   });
 
   const editarMutation = useMutation({
-    mutationFn: (data: any) => api.patch(`/empleados/${empleado!.id}`, data).then((r) => r.data),
+    mutationFn: (data: any) => api.patch(`/usuarios/${empleado!.id}`, data).then((r) => r.data),
     onSuccess: async () => {
       if (cambiarPwd && password) {
         try {
-          await api.patch(`/empleados/${empleado!.id}/password`, { password });
+          await api.patch(`/usuarios/${empleado!.id}/password`, { password });
         } catch (e: any) {
-          toast.show(e?.response?.data?.error || 'Empleado actualizado pero contraseña no cambió', 'error');
+          toast.show(e?.response?.data?.error || 'Usuario actualizado pero contraseña no cambió', 'error');
           qc.invalidateQueries({ queryKey: ['empleados'] });
           return;
         }
       }
       qc.invalidateQueries({ queryKey: ['empleados'] });
-      toast.show('Empleado actualizado', 'success');
+      toast.show('Usuario actualizado', 'success');
       onClose();
     },
     onError: (e: any) => toast.show(e?.response?.data?.error || 'No se pudo actualizar', 'error')
@@ -116,10 +116,10 @@ export default function EmpleadoFormModal({ open, onClose, empleado }: Props) {
     <Modal
       open={open}
       onClose={onClose}
-      title={editando ? 'Editar empleado' : 'Nuevo empleado'}
+      title={editando ? 'Editar usuario' : 'Nuevo usuario'}
       subtitle={editando
         ? 'Cambia el rol, estado o restablece contraseña.'
-        : 'Crea una nueva cuenta para que el empleado pueda iniciar sesión.'}
+        : 'Crea una nueva cuenta para iniciar sesión.'}
     >
       <form onSubmit={submit} className="p-6 space-y-4">
         <Field label="Nombre *" error={tocado && errNombre ? 'El nombre es obligatorio' : undefined}>
@@ -155,12 +155,12 @@ export default function EmpleadoFormModal({ open, onClose, empleado }: Props) {
         </div>
 
         {!editando ? (
-          <Field label="Contraseña *" error={tocado && errPwd ? 'Mínimo 6 caracteres' : undefined}>
+          <Field label="Contraseña *" error={tocado && errPwd ? 'Mínimo 8 caracteres' : undefined}>
             <Input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              minLength={6}
+              minLength={8}
             />
           </Field>
         ) : (
@@ -176,12 +176,12 @@ export default function EmpleadoFormModal({ open, onClose, empleado }: Props) {
               Restablecer contraseña
             </label>
             {cambiarPwd && (
-              <Field label="Nueva contraseña *" error={tocado && errPwd ? 'Mínimo 6 caracteres' : undefined}>
+              <Field label="Nueva contraseña *" error={tocado && errPwd ? 'Mínimo 8 caracteres' : undefined}>
                 <Input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  minLength={6}
+                  minLength={8}
                 />
               </Field>
             )}
@@ -193,7 +193,7 @@ export default function EmpleadoFormModal({ open, onClose, empleado }: Props) {
             Cancelar
           </Button>
           <Button type="submit" loading={enviando}>
-            {editando ? 'Guardar cambios' : 'Crear empleado'}
+            {editando ? 'Guardar cambios' : 'Crear usuario'}
           </Button>
         </div>
       </form>

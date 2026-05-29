@@ -46,6 +46,26 @@ const item = z.object({
   observacion: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().trim().max(2000).optional()
+  ),
+  // Snapshot opcional de marca por item. marcaId acepta uuid; si no es uuid
+  // válido (ej. id local pendiente) lo ignoramos en el preprocess para no
+  // bloquear el create — el snapshot de nombre/código basta para impresión.
+  marcaId: z.preprocess(
+    (v) => {
+      if (typeof v !== 'string') return undefined;
+      const s = v.trim();
+      if (!s) return undefined;
+      return uuidRegex.test(s) ? s : undefined;
+    },
+    z.string().optional()
+  ),
+  marcaNombre: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().trim().max(100).optional()
+  ),
+  marcaCodigo: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().trim().max(30).optional()
   )
 });
 
@@ -57,6 +77,12 @@ const crear = z.object({
     z.string().trim().max(2000).optional()
   ),
   fechaEntrega: fechaOpcional,
+  // Número de orden local generado por el cliente offline (ej. SAN-001).
+  // Se almacena como referencia; el backend igual asigna `numero` oficial.
+  numeroLocal:  z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().trim().max(40).optional()
+  ),
   ...syncMeta
 });
 

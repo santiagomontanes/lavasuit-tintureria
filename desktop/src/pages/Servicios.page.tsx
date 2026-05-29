@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Package, Pencil, Plus, PowerOff, Power, Search, Star, Tags, Trash2, UserRound } from 'lucide-react';
+import { FileSpreadsheet, Package, Pencil, Plus, PowerOff, Power, Search, Star, Tags, Trash2, UserRound } from 'lucide-react';
 import api from '../services/api';
 import PageHeader from '../components/ui/PageHeader';
 import Badge from '../components/ui/Badge';
@@ -12,7 +12,9 @@ import { Table, TableContainer, TBody, TD, TH, THead, TR } from '../components/u
 import { inputClassName } from '../components/ui/Input';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ServicioFormModal from '../components/forms/ServicioForm.modal';
+import ImportarExcelModal from '../components/forms/ImportarExcel.modal';
 import { useToastStore } from '../store/toast.store';
+import { useAuthStore } from '../store/auth.store';
 import { cn } from '../lib/cn';
 
 interface Servicio {
@@ -54,8 +56,10 @@ export default function ServiciosPage() {
   const [vista,        setVista]        = useState<'tabla' | 'tarjetas'>('tabla');
 
   const [openForm,    setOpenForm]    = useState(false);
+  const [openImport,  setOpenImport]  = useState(false);
   const [editando,    setEditando]    = useState<Servicio | null>(null);
   const [aDesactivar, setADesactivar] = useState<Servicio | null>(null);
+  const esAdmin = useAuthStore((s) => s.usuario?.rol === 'ADMIN');
 
   useEffect(() => {
     const t = setTimeout(() => setBusquedaDeb(busqueda), 250);
@@ -127,8 +131,8 @@ export default function ServiciosPage() {
     <div className="space-y-5">
       <PageHeader
         eyebrow="Catálogo"
-        title="Servicios"
-        description="Define, edita y administra los servicios disponibles. Los pedidos históricos conservan el nombre y precio originales."
+        title="Prendas"
+        description="Define, edita e importa el catálogo de prendas. Los pedidos históricos conservan el nombre y precio originales."
         meta={
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="success" outline>{totales.activos} activos</Badge>
@@ -136,7 +140,16 @@ export default function ServiciosPage() {
             {totales.personalizados > 0 && <Badge tone="warning" outline>{totales.personalizados} personalizados</Badge>}
           </div>
         }
-        actions={<Button leftIcon={<Plus size={16} />} onClick={abrirCrear}>Nuevo servicio</Button>}
+        actions={
+          <div className="flex gap-2">
+            {esAdmin && (
+              <Button variant="secondary" leftIcon={<FileSpreadsheet size={16} />} onClick={() => setOpenImport(true)}>
+                Importar Excel
+              </Button>
+            )}
+            <Button leftIcon={<Plus size={16} />} onClick={abrirCrear}>Nueva prenda</Button>
+          </div>
+        }
       />
 
       <Card className="p-4 space-y-3">
@@ -384,6 +397,16 @@ export default function ServiciosPage() {
       )}
 
       <ServicioFormModal open={openForm} onClose={cerrarForm} servicio={editando} />
+
+      <ImportarExcelModal
+        open={openImport}
+        onClose={() => setOpenImport(false)}
+        titulo="Importar prendas desde Excel"
+        subtitulo="Hoja 'prendas' con: codigo, nombre, categoria, precio_base, abreviaturas, activo."
+        endpointImport="/servicios/importar-excel"
+        endpointPlantilla="/servicios/plantilla-excel"
+        invalidarQueryKeys={[['servicios']]}
+      />
 
       <ConfirmDialog
         open={!!aDesactivar}

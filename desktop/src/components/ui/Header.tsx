@@ -1,8 +1,12 @@
 import React from 'react';
-import { ArrowLeft, CalendarDays, Search } from 'lucide-react';
+import { ArrowLeft, CalendarDays, Search, Server } from 'lucide-react';
 import { useNavStore, tituloVista } from '../../store/nav.store';
 import { useAuthStore } from '../../store/auth.store';
 import ConnectionStatus from './ConnectionStatus';
+
+interface HeaderProps {
+  onConfigurarServidor?: () => void;
+}
 
 const subtitulo: Record<string, string> = {
   dashboard:        'Resumen operativo de hoy',
@@ -12,7 +16,7 @@ const subtitulo: Record<string, string> = {
   'pedido-detalle': 'Ficha completa del pedido'
 };
 
-export default function Header() {
+export default function Header({ onConfigurarServidor }: HeaderProps = {}) {
   const view    = useNavStore((s) => s.view);
   const navegar = useNavStore((s) => s.navegar);
   const usuario = useAuthStore((s) => s.usuario);
@@ -52,6 +56,16 @@ export default function Header() {
           <span>{new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
         </div>
         <ConnectionStatus />
+        {onConfigurarServidor && (
+          <button
+            onClick={onConfigurarServidor}
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 focus-ring"
+            title="Configurar servidor"
+            aria-label="Configurar servidor"
+          >
+            <Server size={16} />
+          </button>
+        )}
         {usuario && (
           <div className="hidden lg:block text-right leading-tight">
             <p className="text-sm font-semibold text-slate-900">{usuario.nombre}</p>

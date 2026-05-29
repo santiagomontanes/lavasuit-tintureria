@@ -293,14 +293,24 @@ exports.asignar = asyncHandler(async (req, res) => {
     throw new HttpError(400, 'Debe enviar clienteIds o un rango desde/hasta');
   }
 
-  const resultado = await prisma.cliente.updateMany({
+  await prisma.cliente.updateMany({
     where,
     data: { asignadoAId: usuarioId }
   });
 
-  console.log(`[clientes.asignar] ${resultado.count} clientes -> ${empleado.nombre} (${usuarioId})`);
-  ioBus.emit('clientes-asignados', { usuarioId, total: resultado.count });
-  res.json({ asignados: resultado.count, usuarioId, empleado: empleado.nombre });
+  /* Conteo real y sin ambigüedad: clientes que coinciden con el criterio y
+   * que efectivamente quedaron asignados a este empleado. `asignados` cuenta
+   * solo los activos (los que se ven en la lista de la ruta); `procesados`
+   * incluye también inactivos. Así el mensaje del frontend coincide con la
+   * lista visible y no se calcula a partir de un rango aproximado. */
+  const [asignados, procesados] = await Promise.all([
+    prisma.cliente.count({ where: { ...where, asignadoAId: usuarioId, activo: true } }),
+    prisma.cliente.count({ where: { ...where, asignadoAId: usuarioId } })
+  ]);
+
+  console.log(`[clientes.asignar] ${asignados} clientes activos -> ${empleado.nombre} (${usuarioId}) [procesados=${procesados}]`);
+  ioBus.emit('clientes-asignados', { usuarioId, total: asignados });
+  res.json({ asignados, procesados, usuarioId, empleado: empleado.nombre });
 });
 
 /*

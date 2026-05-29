@@ -273,7 +273,7 @@ function EmpleadoDetalle({
           onClick={onBack}
           className="mb-3 inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-900 focus-ring rounded-lg"
         >
-          <ArrowLeft size={15} /> Volver a empleados
+          <ArrowLeft size={15} /> Volver a usuarios
         </button>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -562,10 +562,10 @@ function EmpleadoLista({
     <div className="space-y-5">
       <PageHeader
         eyebrow="Administración"
-        title="Empleados"
+        title="Usuarios"
         description="Rendimiento y actividad de cada miembro del equipo."
-        meta={<Badge tone="info" outline>{empleados.length} empleados</Badge>}
-        actions={<Button leftIcon={<Plus size={16} />} onClick={onNuevo}>Nuevo empleado</Button>}
+        meta={<Badge tone="info" outline>{empleados.length} usuarios</Badge>}
+        actions={<Button leftIcon={<Plus size={16} />} onClick={onNuevo}>Nuevo usuario</Button>}
       />
 
       {/* KPIs globales */}
@@ -574,8 +574,8 @@ function EmpleadoLista({
           ? Array.from({ length: 4 }).map((_, i) => <SkeletonStatCard key={i} />)
           : (
             <>
-              <StatCard tone="primary" label="Total empleados"  value={empleados.length} icon={<Users      size={17} />} />
-              <StatCard tone="success" label="Empleados activos" value={totalActivos}     icon={<CheckCircle2 size={17} />} />
+              <StatCard tone="primary" label="Total usuarios"  value={empleados.length} icon={<Users      size={17} />} />
+              <StatCard tone="success" label="Usuarios activos" value={totalActivos}     icon={<CheckCircle2 size={17} />} />
               <StatCard tone="info"    label="Órdenes totales"   value={totalOrdenes}     icon={<ShoppingBag  size={17} />} />
               <StatCard tone="success" label="Ventas totales"    value={moneda(totalVentas)} icon={<CreditCard size={17} />} />
             </>
@@ -596,13 +596,13 @@ function EmpleadoLista({
 
       {/* Tabla */}
       {isLoading ? (
-        <LoadingState label="Cargando empleados..." />
+        <LoadingState label="Cargando usuarios..." />
       ) : filtrados.length === 0 ? (
         <Card>
           <EmptyState
             icon={<UserCog size={22} />}
-            title="Sin empleados"
-            description="No se encontraron empleados que coincidan con la búsqueda."
+            title="Sin usuarios"
+            description="No se encontraron usuarios que coincidan con la búsqueda."
           />
         </Card>
       ) : (
@@ -611,7 +611,7 @@ function EmpleadoLista({
             <Table>
               <THead>
                 <TR>
-                  <TH>Empleado</TH>
+                  <TH>Usuario</TH>
                   <TH>Rol</TH>
                   <TH>Estado</TH>
                   <TH align="right">Órdenes</TH>

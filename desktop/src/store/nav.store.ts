@@ -6,8 +6,11 @@ export type View =
   | { kind: 'clientes' }
   | { kind: 'rutas' }
   | { kind: 'servicios' }
+  | { kind: 'marcas' }
+  | { kind: 'colores' }
   | { kind: 'caja' }
   | { kind: 'empleados' }
+  | { kind: 'configuracion' }
   | { kind: 'pedido-detalle'; id: string };
 
 interface NavState {
@@ -49,7 +52,10 @@ export const tituloVista: Record<View['kind'], string> = {
   'clientes':        'Clientes',
   'rutas':           'Rutas y asignaciones',
   'servicios':       'Servicios',
+  'marcas':          'Marcas',
+  'colores':         'Colores',
   'caja':            'Caja',
-  'empleados':       'Empleados',
+  'empleados':       'Usuarios',
+  'configuracion':   'Configuración de empresa',
   'pedido-detalle':  'Detalle del pedido'
 };

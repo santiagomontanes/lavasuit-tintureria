@@ -158,6 +158,9 @@ export default function PedidoDetallePage({ id }: Props) {
             <Badge dot tone={PEDIDO_ESTADO_TONE[pedido.estado] ?? 'neutral'}>
               {PEDIDO_ESTADO_LABEL[pedido.estado] ?? pedido.estado}
             </Badge>
+            {pedido.numeroLocal && (
+              <Badge tone="neutral" outline>Orden offline: {pedido.numeroLocal}</Badge>
+            )}
           </div>
           <p className="mt-1 text-sm text-slate-500">
             Creado el {dayjs(pedido.createdAt).format('DD/MM/YYYY HH:mm')}

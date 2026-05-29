@@ -1,6 +1,7 @@
 import React from 'react';
 import dayjs from 'dayjs';
 import { printHtml } from '../../utils/print';
+import { codigoPrenda, marcaTag, coloresTexto, observacionTexto } from '../../lib/itemFormat';
 
 const moneda = (v: number) =>
   `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -28,21 +29,22 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
   const esCliente = tipo === 'cliente';
   const titulo    = esCliente ? 'RECIBO DE ORDEN' : 'COPIA RECOLECTOR / VENDEDOR';
 
-  const filaItems = items.map((it: any) => `
+  const filaItems = items.map((it: any) => {
+    const codigo  = codigoPrenda(it);
+    const marca   = marcaTag(it);
+    const colores = coloresTexto(it);
+    const obs     = observacionTexto(it);
+    const prendaCell = `<strong>${codigo}</strong>${marca ? ` <span style="color:#64748b">${marca}</span>` : ''}`;
+    return `
     <tr>
-      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${it.nombre ?? it.servicio?.nombre ?? '—'}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${prendaCell}</td>
       <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:center;">${it.cantidad}</td>
-      ${esCliente ? `
-        <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${it.colorActual ?? '—'}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${it.colorDeseado ?? '—'}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${it.observaciones ?? ''}</td>
-      ` : `
-        <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${it.colorActual ?? '—'} → ${it.colorDeseado ?? '—'}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${it.observaciones ?? ''}</td>
-      `}
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;">${colores}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#64748b;">${obs}</td>
       <td style="padding:6px 8px;border-bottom:1px solid #e2e8f0;text-align:right;">${moneda(Number(it.subtotal ?? 0))}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   const filaPagos = pagos.map((p: any) => `
     <tr>
@@ -53,9 +55,9 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
     </tr>
   `).join('');
 
-  const headersItems = esCliente
-    ? '<th>Prenda / Servicio</th><th>Cant.</th><th>Color actual</th><th>Color deseado</th><th>Obs.</th><th>Subtotal</th>'
-    : '<th>Prenda / Servicio</th><th>Cant.</th><th>Colores</th><th>Obs. internas</th><th>Subtotal</th>';
+  // Unificado: una sola columna "Colores".
+  const headersItems =
+    '<th>Prenda</th><th>Cant.</th><th>Colores</th><th>Obs.</th><th>Subtotal</th>';
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -160,7 +162,7 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
         ${filaItems}
         <tr>
           <td colspan="2" style="padding:6px 8px;text-align:right;font-size:10px;color:#64748b;">Total prendas</td>
-          <td colspan="${esCliente ? 4 : 3}" style="padding:6px 8px;text-align:right;font-weight:700;">
+          <td colspan="3" style="padding:6px 8px;text-align:right;font-weight:700;">
             ${items.reduce((acc: number, it: any) => acc + Number(it.cantidad), 0)} prendas
           </td>
         </tr>
@@ -231,6 +233,11 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
     <div class="linea-ctrl"></div>
   </div>
   `}
+
+  <div style="margin-top:14px;padding-top:8px;border-top:1px solid #e2e8f0;text-align:center;font-size:9px;color:#94a3b8;line-height:1.4;">
+    Software diseñado por <strong style="color:#64748b">SISTETECNI</strong><br/>
+    LavaSuit — Software para Tintorerías y Lavanderías
+  </div>
 
 </body>
 </html>`;
@@ -303,41 +310,30 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
             <tr className="bg-slate-900 text-white">
               <th className="p-2 text-left">Prenda</th>
               <th className="p-2 text-center">Cant.</th>
-              {esCliente ? (
-                <>
-                  <th className="p-2 text-left">Color actual</th>
-                  <th className="p-2 text-left">Color deseado</th>
-                  <th className="p-2 text-left">Observación</th>
-                </>
-              ) : (
-                <>
-                  <th className="p-2 text-left">Colores</th>
-                  <th className="p-2 text-left">Observaciones</th>
-                </>
-              )}
+              <th className="p-2 text-left">Colores</th>
+              <th className="p-2 text-left">Obs.</th>
               <th className="p-2 text-right">Subtotal</th>
             </tr>
           </thead>
           <tbody>
-            {items.map((it: any, i: number) => (
-              <tr key={it.id ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
-                <td className="p-2 border-b border-slate-100">{it.nombre ?? it.servicio?.nombre ?? '—'}</td>
-                <td className="p-2 border-b border-slate-100 text-center">{it.cantidad}</td>
-                {esCliente ? (
-                  <>
-                    <td className="p-2 border-b border-slate-100">{it.colorActual ?? '—'}</td>
-                    <td className="p-2 border-b border-slate-100">{it.colorDeseado ?? '—'}</td>
-                    <td className="p-2 border-b border-slate-100 text-slate-500">{it.observaciones ?? ''}</td>
-                  </>
-                ) : (
-                  <>
-                    <td className="p-2 border-b border-slate-100">{it.colorActual ?? '—'} → {it.colorDeseado ?? '—'}</td>
-                    <td className="p-2 border-b border-slate-100 text-slate-500">{it.observaciones ?? ''}</td>
-                  </>
-                )}
-                <td className="p-2 border-b border-slate-100 text-right font-medium">{moneda(Number(it.subtotal))}</td>
-              </tr>
-            ))}
+            {items.map((it: any, i: number) => {
+              const codigo  = codigoPrenda(it);
+              const marca   = marcaTag(it);
+              const colores = coloresTexto(it);
+              const obs     = observacionTexto(it);
+              return (
+                <tr key={it.id ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                  <td className="p-2 border-b border-slate-100">
+                    <strong>{codigo}</strong>
+                    {marca ? <span className="text-slate-500"> {marca}</span> : null}
+                  </td>
+                  <td className="p-2 border-b border-slate-100 text-center">{it.cantidad}</td>
+                  <td className="p-2 border-b border-slate-100">{colores}</td>
+                  <td className="p-2 border-b border-slate-100 text-slate-500">{obs}</td>
+                  <td className="p-2 border-b border-slate-100 text-right font-medium">{moneda(Number(it.subtotal))}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -429,6 +425,10 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
           </div>
         </>
       )}
+      <div className="mt-4 pt-2 border-t border-slate-200 text-center text-[9px] text-slate-400 leading-tight">
+        Software diseñado por <strong className="text-slate-500">SISTETECNI</strong><br/>
+        LavaSuit — Software para Tintorerías y Lavanderías
+      </div>
     </div>
   );
 }

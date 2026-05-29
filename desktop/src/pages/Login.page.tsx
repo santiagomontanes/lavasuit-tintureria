@@ -1,9 +1,13 @@
 import React, { useState } from 'react';
-import { Lock, Mail, AlertCircle } from 'lucide-react';
+import { Lock, Mail, AlertCircle, Server } from 'lucide-react';
 import { useAuthStore } from '../store/auth.store';
 import Button from '../components/ui/Button';
 
-export default function LoginPage() {
+interface LoginPageProps {
+  onConfigurarServidor?: () => void;
+}
+
+export default function LoginPage({ onConfigurarServidor }: LoginPageProps = {}) {
   const { login, loading, error } = useAuthStore();
   const [email,    setEmail]    = useState('admin@lavasuit.com');
   const [password, setPassword] = useState('');
@@ -103,6 +107,17 @@ export default function LoginPage() {
               {loading ? 'Ingresando…' : 'Iniciar sesión'}
             </Button>
           </form>
+
+          {onConfigurarServidor && (
+            <button
+              type="button"
+              onClick={onConfigurarServidor}
+              className="mt-6 w-full inline-flex items-center justify-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 transition-colors"
+            >
+              <Server size={12} />
+              Configurar servidor
+            </button>
+          )}
 
           <p className="text-center text-xs text-slate-400 mt-8">
             © {new Date().getFullYear()} LavaSuit

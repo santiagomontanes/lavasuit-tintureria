@@ -29,6 +29,29 @@ model Usuario {
   evidenciasEntrega EvidenciaEntrega[]
   serviciosCreados Servicio[]              @relation("ServicioCreador")
   serviciosEditados Servicio[]             @relation("ServicioEditor")
+  marcasCreadas    Marca[]                 @relation("MarcaCreador")
+  marcasEditadas   Marca[]                 @relation("MarcaEditor")
+  coloresCreados   Color[]                 @relation("ColorCreador")
+  coloresEditados  Color[]                 @relation("ColorEditor")
+}
+
+model Color {
+  id               String     @id @default(uuid())
+  nombre           String     @db.VarChar(60)
+  codigo           String?    @db.VarChar(30)
+  hex              String?    @db.VarChar(9)
+  activo           Boolean    @default(true)
+  creadoPorId      String?
+  actualizadoPorId String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  deletedAt        DateTime?
+  creadoPor        Usuario?   @relation("ColorCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  actualizadoPor   Usuario?   @relation("ColorEditor",  fields: [actualizadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([activo])
+  @@index([deletedAt])
+  @@index([codigo])
 }
 
 enum Rol {
@@ -73,6 +96,9 @@ model Servicio {
   unidad           String       @default("prenda") @db.VarChar(30)
   activo           Boolean      @default(true)
   esPersonalizado  Boolean      @default(false)
+  codigo           String?      @db.VarChar(30)
+  abreviaturas     String?      @db.VarChar(255)
+  marcaId          String?
   creadoPorId      String?
   actualizadoPorId String?
   createdAt        DateTime     @default(now())
@@ -80,16 +106,40 @@ model Servicio {
   deletedAt        DateTime?
   creadoPor        Usuario?     @relation("ServicioCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
   actualizadoPor   Usuario?     @relation("ServicioEditor",  fields: [actualizadoPorId], references: [id], onDelete: SetNull)
+  marca            Marca?       @relation(fields: [marcaId], references: [id], onDelete: SetNull)
   items            PedidoItem[]
 
   @@index([activo])
   @@index([deletedAt])
   @@index([categoria])
+  @@index([codigo])
+  @@index([marcaId])
+}
+
+model Marca {
+  id               String     @id @default(uuid())
+  nombre           String     @db.VarChar(100)
+  codigo           String?    @db.VarChar(30)
+  abreviaturas     String?    @db.VarChar(255)
+  activo           Boolean    @default(true)
+  creadoPorId      String?
+  actualizadoPorId String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  deletedAt        DateTime?
+  creadoPor        Usuario?   @relation("MarcaCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  actualizadoPor   Usuario?   @relation("MarcaEditor",  fields: [actualizadoPorId], references: [id], onDelete: SetNull)
+  servicios        Servicio[]
+
+  @@index([activo])
+  @@index([deletedAt])
+  @@index([codigo])
 }
 
 model Pedido {
   id              String       @id @default(uuid())
   numero          Int          @unique @default(autoincrement())
+  numeroLocal     String?      @db.VarChar(40)
   clienteId       String
   usuarioId       String
   sesionTrabajoId String?
@@ -137,9 +187,16 @@ model PedidoItem {
   colorActual    String?  @db.VarChar(80)
   colorDeseado   String?  @db.VarChar(80)
   observaciones  String?  @db.Text
+  // Snapshot de marca al momento de crear el item (no FK para evitar romper
+  // pedidos al borrar/renombrar marcas; marcaId es referencia débil).
+  marcaId        String?
+  marcaNombre    String?  @db.VarChar(100)
+  marcaCodigo    String?  @db.VarChar(30)
   pedido         Pedido   @relation(fields: [pedidoId], references: [id])
   servicio       Servicio @relation(fields: [servicioId], references: [id])
   garantias      Garantia[]
+
+  @@index([marcaId])
 }
 
 model Pago {
@@ -335,4 +392,22 @@ model EvidenciaEntrega {
 
   @@index([pedidoId])
   @@index([usuarioId])
+}
+
+/// Configuración de la empresa para impresión de recibos.
+/// Tabla singleton: siempre se opera sobre el registro id = "singleton".
+model ConfiguracionEmpresa {
+  id               String   @id @default("singleton")
+  nombreNegocio    String   @default("LavaSuit") @db.VarChar(150)
+  nit              String?  @db.VarChar(40)
+  telefono         String?  @db.VarChar(40)
+  direccion        String?  @db.VarChar(255)
+  ciudad           String?  @db.VarChar(120)
+  logoBase64       String?  @db.LongText
+  politicasTexto   String?  @db.Text
+  garantiaTexto    String?  @db.Text
+  pieRecibo        String?  @db.Text
+  actualizadoPorId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }

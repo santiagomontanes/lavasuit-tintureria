@@ -80,3 +80,12 @@ errores/
 # ───── docs/build-pdf ─────
 docs/node_modules/
 docs/_tmp_pdf_source.html
+
+# ───── Android release signing (NO commitear) ─────
+# *.jks y *.keystore ya cubiertos arriba. keystore.properties contiene passwords.
+mobile/android/keystore.properties
+mobile/android/app/lavasuit-release.jks
+mobile/android/app/release.keystore
+
+echo instaladores/*.apk >> .gitignore
+echo instaladores/*.exe >> .gitignore

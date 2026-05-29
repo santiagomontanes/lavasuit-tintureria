@@ -101,7 +101,7 @@ exports.crear = asyncHandler(async (req, res) => {
   }
 
   const clean = stripSyncMeta(req.body);
-  const { clienteId, items, notas, fechaEntrega } = clean;
+  const { clienteId, items, notas, fechaEntrega, numeroLocal } = clean;
 
   let pedido;
   try {
@@ -131,6 +131,7 @@ exports.crear = asyncHandler(async (req, res) => {
           clienteId,
           usuarioId:    req.user.id,
           sesionTrabajoId: sesion?.id ?? null,
+          numeroLocal:  numeroLocal || null,
           total,
           notas:        notas || null,
           fechaEntrega: fechaEntrega ? new Date(fechaEntrega) : null,
@@ -143,7 +144,10 @@ exports.crear = asyncHandler(async (req, res) => {
               subtotal:   Number(i.precio) * Number(i.cantidad),
               colorActual:   i.colorActual || null,
               colorDeseado:  i.colorDeseado || null,
-              observaciones: i.observaciones || i.observacion || null
+              observaciones: i.observaciones || i.observacion || null,
+              marcaId:       i.marcaId || null,
+              marcaNombre:   i.marcaNombre || null,
+              marcaCodigo:   i.marcaCodigo || null
             }))
           }
         },

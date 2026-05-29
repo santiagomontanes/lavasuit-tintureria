@@ -26,6 +26,36 @@
       "dist/renderer/**",
       "electron/**"
     ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!node_modules/**",
+          "!node_modules",
+          "!.env",
+          "!.env.local",
+          "!.env.test",
+          "!.env.test.example",
+          "!.env.*.local",
+          "!logs/**",
+          "!backups/**",
+          "!coverage/**",
+          "!dist/**",
+          "!.git/**",
+          "!tests/**",
+          "!jest.config.js",
+          "!jest.setup.js",
+          "!public/uploads/**",
+          "!*.log",
+          "!*.sqlite",
+          "!*.sqlite3",
+          "!*.db",
+          "!prisma/dev.db"
+        ]
+      }
+    ],
     "asar": true,
     "win": {
       "target": [

@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  LayoutDashboard, ShoppingBag, Users, Package, LogOut, Route, Banknote, UserCog
+  LayoutDashboard, ShoppingBag, Users, Package, LogOut, Route, Banknote, UserCog, Settings, Tag, Palette
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
 import { useNavStore, View } from '../../store/nav.store';
@@ -19,9 +19,12 @@ const items: Item[] = [
   { id: 'pedidos',   label: 'Pedidos',   icon: ShoppingBag     },
   { id: 'clientes',  label: 'Clientes',  icon: Users           },
   { id: 'rutas',     label: 'Rutas',     icon: Route           },
-  { id: 'servicios', label: 'Servicios', icon: Package         },
+  { id: 'servicios', label: 'Prendas',   icon: Package         },
+  { id: 'marcas',    label: 'Marcas',    icon: Tag             },
+  { id: 'colores',   label: 'Colores',   icon: Palette         },
   { id: 'caja',      label: 'Caja',      icon: Banknote        },
-  { id: 'empleados', label: 'Empleados', icon: UserCog, soloAdmin: true }
+  { id: 'empleados', label: 'Usuarios', icon: UserCog, soloAdmin: true },
+  { id: 'configuracion', label: 'Configuración', icon: Settings, soloAdmin: true }
 ];
 
 export default function Sidebar() {

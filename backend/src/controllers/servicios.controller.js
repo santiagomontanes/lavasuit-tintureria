@@ -6,10 +6,12 @@ const {
   pickSyncMeta, stripSyncMeta, payloadHash,
   findOperation, createOperation, logDuplicate
 } = require('../lib/idempotency');
+const { serializarAbrev, normalizar, score } = require('../lib/abreviaturas');
 
 const SERVICIO_INCLUDE = {
   creadoPor:      { select: { id: true, nombre: true } },
-  actualizadoPor: { select: { id: true, nombre: true } }
+  actualizadoPor: { select: { id: true, nombre: true } },
+  marca:          { select: { id: true, nombre: true, codigo: true } }
 };
 
 const sanitizarTexto = (v, max) => {
@@ -84,6 +86,9 @@ exports.crear = asyncHandler(async (req, res) => {
   const descripcion = sanitizarTexto(clean.descripcion);
   const categoria   = sanitizarTexto(clean.categoria, 60);
   const unidad      = sanitizarTexto(clean.unidad, 30) || 'prenda';
+  const codigo      = sanitizarTexto(clean.codigo, 30);
+  const abreviaturas = serializarAbrev(clean.abreviaturas);
+  const marcaId     = clean.marcaId ? String(clean.marcaId) : null;
   const precio      = Number(clean.precio);
   const esPersonalizado = clean.esPersonalizado === true;
   const activo      = clean.activo === false ? false : true;
@@ -105,6 +110,9 @@ exports.crear = asyncHandler(async (req, res) => {
     unidad,
     activo,
     esPersonalizado,
+    codigo,
+    abreviaturas,
+    marcaId,
     creadoPorId,
     actualizadoPorId: creadoPorId
   });
@@ -170,7 +178,10 @@ exports.crear = asyncHandler(async (req, res) => {
   res.status(201).json(servicio);
 });
 
-const CAMPOS_EDITABLES = ['nombre', 'descripcion', 'categoria', 'precio', 'unidad', 'activo'];
+const CAMPOS_EDITABLES = [
+  'nombre', 'descripcion', 'categoria', 'precio', 'unidad', 'activo',
+  'codigo', 'abreviaturas', 'marcaId'
+];
 
 const construirPatch = (body) => {
   const patch = {};
@@ -193,6 +204,12 @@ const construirPatch = (body) => {
       patch.categoria = sanitizarTexto(v, 60);
     } else if (k === 'descripcion') {
       patch.descripcion = sanitizarTexto(v);
+    } else if (k === 'codigo') {
+      patch.codigo = sanitizarTexto(v, 30);
+    } else if (k === 'abreviaturas') {
+      patch.abreviaturas = serializarAbrev(v);
+    } else if (k === 'marcaId') {
+      patch.marcaId = v ? String(v) : null;
     }
   }
   return patch;
@@ -273,4 +290,34 @@ exports.desactivar = asyncHandler(async (req, res) => {
 
   ioBus.emit('servicio-eliminado', { id: servicio.id });
   res.json({ mensaje: 'Servicio desactivado', servicio });
+});
+
+/* GET /api/servicios/autocomplete?q=ca&limit=10
+ * Endpoint optimizado para autocomplete POS.
+ * Rankea: código exacto > código prefix > abreviatura prefix > nombre prefix. */
+exports.autocomplete = asyncHandler(async (req, res) => {
+  const q = sanitizarTexto(req.query.q, 60);
+  const queryNorm = q ? normalizar(q) : '';
+  const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+
+  const candidatas = await prisma.servicio.findMany({
+    where:  { deletedAt: null, activo: true },
+    select: {
+      id: true, nombre: true, precio: true, unidad: true,
+      categoria: true, codigo: true, abreviaturas: true,
+      marca: { select: { id: true, nombre: true, codigo: true } }
+    },
+    take: 1000
+  });
+
+  if (!queryNorm) {
+    return res.json(candidatas.slice(0, limit));
+  }
+  const ranked = candidatas
+    .map((s) => ({ s, score: score(s, queryNorm) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || a.s.nombre.localeCompare(b.s.nombre))
+    .slice(0, limit)
+    .map((x) => x.s);
+  res.json(ranked);
 });

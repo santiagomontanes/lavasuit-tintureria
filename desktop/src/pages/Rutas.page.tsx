@@ -326,10 +326,16 @@ function AsignarCard({ empleados, clientes }: { empleados: Empleado[]; clientes:
         body.clienteIds = Array.from(seleccion);
       }
       const { data } = await api.post('/clientes/asignar', body);
-      return data as { asignados: number; empleado: string };
+      return data as { asignados: number; procesados: number; empleado: string };
     },
     onSuccess: (data) => {
-      toast(`${data.asignados} clientes asignados a ${data.empleado}`, 'success');
+      // El conteo viene del backend (clientes realmente asignados), no de un
+      // cálculo aproximado del rango en el frontend.
+      const { asignados, procesados, empleado } = data;
+      const mensaje = procesados > asignados
+        ? `${procesados} clientes procesados, ${asignados} asignados a ${empleado}`
+        : `${asignados} ${asignados === 1 ? 'cliente asignado' : 'clientes asignados'} a ${empleado}`;
+      toast(mensaje, 'success');
       setSeleccion(new Set());
       qc.invalidateQueries({ queryKey: ['rutas'] });
       qc.invalidateQueries({ queryKey: ['clientes'] });
