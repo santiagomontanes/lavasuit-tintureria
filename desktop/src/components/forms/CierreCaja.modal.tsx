@@ -6,8 +6,8 @@ import Button from '../ui/Button';
 import api from '../../services/api';
 import { useToastStore } from '../../store/toast.store';
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../../lib/currency';
+const moneda = formatCurrencyCOP;
 
 interface Props {
   open:       boolean;
@@ -82,7 +82,7 @@ export default function CierreCajaModal({ open, onClose, resumen, fecha, onSucce
           <span className="text-sm font-semibold text-slate-700">Costo / Gasto del día (opcional)</span>
           <p className="text-xs text-slate-500 mb-1">Si introduces un costo, se calculará la utilidad estimada.</p>
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">S/</span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">$</span>
             <input
               type="number"
               min="0"

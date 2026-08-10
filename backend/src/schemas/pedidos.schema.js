@@ -69,9 +69,20 @@ const item = z.object({
   )
 });
 
+const encargadoOpcional = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z.string().trim().max(120).optional()
+);
+
 const crear = z.object({
   clienteId:    id,
   items:        z.array(item).min(1, 'Al menos un item'),
+  encargadoEntrega: encargadoOpcional,
+  // Consolidar la deuda pendiente del cliente dentro de esta orden (punto 9).
+  incluirDeudaAnterior: z.preprocess(
+    (v) => (v === '' || v == null ? undefined : v),
+    z.coerce.boolean().optional()
+  ),
   notas:        z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     z.string().trim().max(2000).optional()
@@ -92,4 +103,49 @@ const actualizarEstado = z.object({
   })
 });
 
-module.exports = { crear, actualizarEstado };
+/* Item de edición: igual que `item` pero con `id` opcional. Si trae un id de
+ * un PedidoItem existente, el controller lo actualiza; si no, lo crea. */
+const itemEditar = item.extend({
+  id: z.preprocess(
+    (v) => {
+      if (typeof v !== 'string') return undefined;
+      const s = v.trim();
+      return s && uuidRegex.test(s) ? s : undefined;
+    },
+    z.string().optional()
+  )
+});
+
+/* Edición de pedido (admin). Reutiliza la estructura de `crear` pero todos los
+ * campos generales son opcionales (solo se actualiza lo enviado) y los items
+ * pueden traer id para edición incremental. No exige colores: la regla de
+ * colores obligatorios vive en el frontend para no romper pedidos legacy. */
+const editar = z.object({
+  clienteId:    id.optional(),
+  // Motivo OBLIGATORIO de la edición (auditoría).
+  motivo:       z.string().trim().min(1, 'El motivo del cambio es obligatorio').max(500),
+  encargadoEntrega: encargadoOpcional,
+  items:        z.array(itemEditar).min(1, 'Al menos un item'),
+  notas:        z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
+    z.string().trim().max(2000).nullable().optional()
+  ),
+  fechaEntrega: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.union([
+      z.string().refine((s) => !Number.isNaN(Date.parse(s)), 'Fecha invalida'),
+      z.null()
+    ]).optional()
+  ),
+  // Concurrencia optimista para ediciones offline: updatedAt que tenía el
+  // cliente al empezar a editar. El controller lo usa para detectar conflictos.
+  baseUpdatedAt: z.string().optional(),
+  // Metadata de sync (idempotencia de ediciones offline). Zod por defecto
+  // descarta claves desconocidas, así que se declaran para que lleguen al
+  // controller y pickSyncMeta las lea.
+  clientMutationId: z.string().optional(),
+  deviceId:         z.string().optional(),
+  createdOfflineAt: z.string().optional()
+});
+
+module.exports = { crear, actualizarEstado, editar };

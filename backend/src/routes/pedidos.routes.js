@@ -34,11 +34,18 @@ const upload = multer({
 router.use(auth);
 
 router.get('/',              ctrl.listar);
+// #2 Diagnóstico READ-ONLY de posibles duplicados históricos. NO borra ni
+// fusiona nada; sólo agrupa candidatos para revisión manual. Antes de '/:id'.
+router.get('/diagnostico/duplicados', ctrl.detectarDuplicados);
 router.get('/:id',           ctrl.obtener);
 router.post('/',             validate({ body: schemas.crear }),            ctrl.crear);
 router.patch('/:id/estado',  validate({ body: schemas.actualizarEstado }), ctrl.actualizarEstado);
+router.patch('/:id',         validate({ body: schemas.editar }),           ctrl.editar);
 router.delete('/:id',        ctrl.eliminar);
 router.post('/:id/entregar', upload.single('foto'),                        ctrl.entregar);
 router.get('/:id/evidencia-entrega', ctrl.obtenerEvidenciaEntrega);
+router.get('/:id/historial-ediciones', ctrl.historialEdiciones);
+router.post('/:id/consolidar-deuda',       ctrl.consolidarDeuda);
+router.post('/:id/revertir-consolidacion', ctrl.revertirConsolidacion);
 
 module.exports = router;

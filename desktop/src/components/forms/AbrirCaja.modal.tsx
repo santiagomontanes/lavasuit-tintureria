@@ -4,6 +4,7 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import api from '../../services/api';
 import { useToastStore } from '../../store/toast.store';
+import { formatCurrencyCOP } from '../../lib/currency';
 
 interface Props {
   open:       boolean;
@@ -28,10 +29,7 @@ export default function AbrirCajaModal({ open, onClose, onSuccess }: Props) {
       observacionApertura: observacion.trim() || undefined
     }).then((r) => r.data),
     onSuccess: (data) => {
-      const base = Number(data.montoBase ?? 0).toLocaleString('es-PE', {
-        minimumFractionDigits: 2, maximumFractionDigits: 2
-      });
-      toast.show(`Caja abierta con base S/ ${base}`, 'success');
+      toast.show(`Caja abierta con base ${formatCurrencyCOP(data.montoBase)}`, 'success');
       onSuccess?.();
       onClose();
     },
@@ -49,7 +47,7 @@ export default function AbrirCajaModal({ open, onClose, onSuccess }: Props) {
             Efectivo con que inicia la caja. Solo afecta el efectivo esperado, no es una venta.
           </p>
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">S/</span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">$</span>
             <input
               type="number"
               min="0"
@@ -64,7 +62,7 @@ export default function AbrirCajaModal({ open, onClose, onSuccess }: Props) {
 
         {montoBase !== '' && !isNaN(montoNum) && (
           <div className="rounded-xl bg-info-50 border border-info-200 px-4 py-3 text-sm text-info-800">
-            Efectivo esperado al cerrar = S/ {Number(montoNum).toLocaleString('es-PE', { minimumFractionDigits: 2 })} + pagos en efectivo del día
+            Efectivo esperado al cerrar = {formatCurrencyCOP(montoNum)} + pagos en efectivo del día
           </div>
         )}
 

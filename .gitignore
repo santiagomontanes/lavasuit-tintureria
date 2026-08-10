@@ -89,3 +89,12 @@ mobile/android/app/release.keystore
 
 echo instaladores/*.apk >> .gitignore
 echo instaladores/*.exe >> .gitignore
+# Respaldos de la base: contienen datos reales de clientes. Nunca al repo.
+backend/backups/
+
+# Logs de ejecución.
+backend/logs/
+
+# Permisos locales de la herramienta: son de esta máquina y han llegado a
+# contener credenciales. No deben viajar al repositorio.
+.claude/settings.local.json

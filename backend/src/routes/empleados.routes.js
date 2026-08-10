@@ -218,7 +218,7 @@ router.get('/:id/actividad',
     const hastaDate = toEnd(hasta);
     const range     = { gte: desdeDate, lte: hastaDate };
 
-    const [pedidos, pagos, clientes, garantias, estadoCambios, cajaSesiones, evidencias] =
+    const [pedidos, pagos, clientes, garantias, estadoCambios, cajaSesiones, evidencias, configCambios, gastos, gastosAuditoria] =
       await Promise.all([
         prisma.pedido.findMany({
           where:   { usuarioId: id, createdAt: range, eliminadoEn: null },
@@ -253,10 +253,24 @@ router.get('/:id/actividad',
           orderBy: { createdAt: 'desc' },
           take:    lim
         }),
+        /* Cambios de estado hechos POR UNA PERSONA.
+         *
+         * Se excluyen los de `origen = 'AUTO_PAGO'`: son la auto-entrega que
+         * dispara el sistema cuando un abono cubre las prendas. Antes, un solo
+         * abono generaba DOS movimientos en esta vista ("Registró pago" +
+         * "Cambió estado: RECIBIDO → ENTREGADO"), y el segundo confundía porque
+         * el empleado nunca ejecutó ese cambio.
+         * La fila sigue existiendo en PedidoEstadoHistorial (auditoría, backup
+         * y reportes de entregas la siguen viendo): solo se oculta de la
+         * actividad operativa del empleado. */
         prisma.pedidoEstadoHistorial.findMany({
-          where:   { usuarioId: id, createdAt: range },
+          where:   {
+            usuarioId: id,
+            createdAt: range,
+            OR: [{ origen: null }, { origen: { not: 'AUTO_PAGO' } }]
+          },
           select:  {
-            id: true, estadoAnterior: true, estadoNuevo: true, createdAt: true,
+            id: true, estadoAnterior: true, estadoNuevo: true, origen: true, createdAt: true,
             pedido: { select: { id: true, numero: true, cliente: { select: { nombre: true } } } }
           },
           orderBy: { createdAt: 'desc' },
@@ -285,7 +299,44 @@ router.get('/:id/actividad',
           },
           orderBy: { createdAt: 'desc' },
           take:    lim
-        })
+        }),
+        prisma.configuracionAuditoria.findMany({
+          where:   { usuarioId: id, createdAt: range },
+          select:  { id: true, etiqueta: true, campo: true, valorAnterior: true, valorNuevo: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+          take:    lim
+        }),
+        /* GASTOS creados por el empleado.
+         * Se filtra y se ordena por `fecha` (la fecha REAL del gasto, la que
+         * eligió quien lo registró), no por `createdAt` —que en un gasto creado
+         * sin conexión es la hora en que se sincronizó—. */
+        prisma.gasto.findMany({
+          where:   { creadoPorId: id, fecha: range },
+          select:  {
+            id: true, concepto: true, categoria: true, descripcion: true,
+            valor: true, metodoPago: true, fecha: true, deletedAt: true,
+            cajaSesionId: true,
+            cajaSesion: { select: { id: true, fechaApertura: true } }
+          },
+          orderBy: { fecha: 'desc' },
+          take:    lim
+        }),
+        /* Ediciones y anulaciones de gastos hechas por el empleado.
+         * Tolerante a un cliente Prisma sin regenerar: si el modelo aún no
+         * existe se devuelve [] y la línea de tiempo sigue mostrando el resto
+         * de eventos (incluidos los gastos creados). */
+        (prisma.gastoAuditoria
+          ? prisma.gastoAuditoria.findMany({
+          where:   { usuarioId: id, createdAt: range },
+          select:  {
+            id: true, accion: true, motivo: true, valorAntes: true, valorDespues: true,
+            createdAt: true,
+            gasto: { select: { id: true, concepto: true, categoria: true, metodoPago: true } }
+          },
+          orderBy: { createdAt: 'desc' },
+          take:    lim
+          }).catch((e) => { console.warn('[actividad] auditoria de gastos no disponible:', e?.message); return []; })
+          : Promise.resolve([]))
       ]);
 
     const eventos = [];
@@ -355,6 +406,53 @@ router.get('/:id/actividad',
       });
     }
 
+    const moneda = (v) => `$${Math.round(Number(v ?? 0)).toLocaleString('es-CO')}`;
+
+    for (const g of gastos) {
+      eventos.push({
+        tipo:         'GASTO',
+        fecha:        g.fecha,                      // fecha real, no la de sincronización
+        descripcion:  `Registró gasto: ${g.concepto}`,
+        pedidoId:     null,
+        pedidoNumero: null,
+        clienteNombre: null,
+        monto:        Number(g.valor ?? 0),
+        extra: {
+          accion:       'CREADO',
+          categoria:    g.categoria,
+          concepto:     g.concepto,
+          descripcionGasto: g.descripcion ?? null,
+          metodoPago:   g.metodoPago ?? 'EFECTIVO',
+          cajaSesionId: g.cajaSesionId ?? null,
+          cajaApertura: g.cajaSesion?.fechaApertura ?? null,
+          anulado:      g.deletedAt != null
+        }
+      });
+    }
+
+    for (const a of gastosAuditoria) {
+      const editado = a.accion === 'EDITADO';
+      eventos.push({
+        tipo:         'GASTO',
+        fecha:        a.createdAt,
+        descripcion:  editado
+          ? `Modificó un gasto: ${a.gasto?.concepto ?? ''}`.trim()
+          : `Anuló un gasto: ${a.gasto?.concepto ?? ''}`.trim(),
+        pedidoId:     null,
+        pedidoNumero: null,
+        clienteNombre: null,
+        monto:        Number(a.valorDespues ?? a.valorAntes ?? 0),
+        extra: {
+          accion:       editado ? 'EDITADO' : 'ANULADO',
+          categoria:    a.gasto?.categoria ?? null,
+          metodoPago:   a.gasto?.metodoPago ?? null,
+          motivo:       a.motivo ?? null,
+          valorAnterior: a.valorAntes != null ? moneda(a.valorAntes) : null,
+          valorNuevo:    a.valorDespues != null ? moneda(a.valorDespues) : null
+        }
+      });
+    }
+
     for (const cs of cajaSesiones) {
       const apertura = new Date(cs.fechaApertura);
       if (apertura >= desdeDate && apertura <= hastaDate) {
@@ -396,6 +494,19 @@ router.get('/:id/actividad',
         clienteNombre: ev.pedido?.cliente?.nombre ?? null,
         monto:        null,
         extra:        { observacion: ev.observacion ?? null }
+      });
+    }
+
+    for (const cc of configCambios) {
+      eventos.push({
+        tipo:         'CONFIGURACION_MODIFICADA',
+        fecha:        cc.createdAt,
+        descripcion:  `Configuración: ${cc.etiqueta ?? cc.campo} — ${cc.valorAnterior ?? '—'} → ${cc.valorNuevo ?? '—'}`,
+        pedidoId:     null,
+        pedidoNumero: null,
+        clienteNombre: null,
+        monto:        null,
+        extra:        { campo: cc.campo, valorAnterior: cc.valorAnterior, valorNuevo: cc.valorNuevo }
       });
     }
 

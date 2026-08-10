@@ -52,8 +52,12 @@ const buildApp = () => {
   app.use('/api/pagos',     require('./routes/pagos.routes'));
   app.use('/api/garantias', require('./routes/garantias.routes'));
   app.use('/api/reportes',  require('./routes/reportes.routes'));
+  app.use('/api/gastos',    require('./routes/gastos.routes'));
   app.use('/api/sesiones-trabajo', require('./routes/sesiones-trabajo.routes'));
   app.use('/api/caja',      require('./routes/caja.routes'));
+  app.use('/api/backups',   require('./routes/backups.routes'));
+  app.use('/api/exportacion', require('./routes/exportacion.routes'));
+  app.use('/api/admin',     require('./routes/admin.routes'));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

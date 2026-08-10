@@ -14,14 +14,17 @@ import { useToastStore } from '../store/toast.store';
 import { cn } from '../lib/cn';
 import { leerExcelClientes, FilaExcel, COLUMNAS_REQUERIDAS } from '../lib/excel';
 import { parseOrden, formatIdentificador } from '../lib/orden';
+import { filtrarClientes } from '../lib/busquedaClientes';
 
 /* ─────────────────────────  Tipos  ───────────────────────── */
 
 interface Empleado { id: string; nombre: string; email: string; rol: string; activo: boolean; }
+interface RutaAsignacion { id: string; usuarioId: string; usuario: { id: string; nombre: string; rol: string }; }
 interface ClienteRow {
   id: string; nombre: string; telefono: string; identificador: string | null;
   ordenBase: number | null; subOrden: number; asignadoAId: string | null;
   asignadoA?: { id: string; nombre: string } | null;
+  rutas?: { id: string; usuario: { id: string; nombre: string; rol: string } }[];
 }
 interface RutaResumen {
   usuarioId: string; nombre: string; email: string; rol: string;
@@ -305,16 +308,11 @@ function AsignarCard({ empleados, clientes }: { empleados: Empleado[]; clientes:
   const [busqueda, setBusqueda] = useState('');
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
 
-  const clientesFiltrados = useMemo(() => {
-    const q = busqueda.trim().toLowerCase();
-    const lista = q
-      ? clientes.filter((c) =>
-          c.nombre.toLowerCase().includes(q) ||
-          c.telefono.includes(q) ||
-          (c.identificador ?? '').toLowerCase().includes(q))
-      : clientes;
-    return lista.slice(0, 200);
-  }, [clientes, busqueda]);
+  // Regla única: número → código, letras → nombre. Nunca teléfono.
+  const clientesFiltrados = useMemo(
+    () => filtrarClientes(clientes, busqueda).slice(0, 200),
+    [clientes, busqueda]
+  );
 
   const asignar = useMutation({
     mutationFn: async () => {
@@ -333,8 +331,8 @@ function AsignarCard({ empleados, clientes }: { empleados: Empleado[]; clientes:
       // cálculo aproximado del rango en el frontend.
       const { asignados, procesados, empleado } = data;
       const mensaje = procesados > asignados
-        ? `${procesados} clientes procesados, ${asignados} asignados a ${empleado}`
-        : `${asignados} ${asignados === 1 ? 'cliente asignado' : 'clientes asignados'} a ${empleado}`;
+        ? `${procesados} clientes procesados, ${asignados} en la ruta de ${empleado}`
+        : `${asignados} ${asignados === 1 ? 'cliente agregado' : 'clientes agregados'} a la ruta de ${empleado}`;
       toast(mensaje, 'success');
       setSeleccion(new Set());
       qc.invalidateQueries({ queryKey: ['rutas'] });
@@ -415,7 +413,7 @@ function AsignarCard({ empleados, clientes }: { empleados: Empleado[]; clientes:
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Buscar cliente por nombre, teléfono o identificador"
+                placeholder="Buscar por nombre o código"
                 value={busqueda}
                 onChange={(e) => setBusqueda(e.target.value)}
                 className={cn(inputClassName, 'pl-9')}
@@ -435,9 +433,9 @@ function AsignarCard({ empleados, clientes }: { empleados: Empleado[]; clientes:
                   <span className="font-mono text-xs text-slate-500 w-14">{c.identificador ?? '—'}</span>
                   <span className="flex-1 text-sm text-slate-800">{c.nombre}</span>
                   <span className="text-xs text-slate-400">{c.telefono}</span>
-                  {c.asignadoA && (
-                    <Badge tone="neutral" outline>{c.asignadoA.nombre}</Badge>
-                  )}
+                  {(c.rutas && c.rutas.length > 0)
+                    ? <Badge tone="success" outline>{c.rutas.length} empleado{c.rutas.length === 1 ? '' : 's'}</Badge>
+                    : c.asignadoA && <Badge tone="neutral" outline>{c.asignadoA.nombre}</Badge>}
                 </label>
               ))}
             </div>
@@ -452,6 +450,144 @@ function AsignarCard({ empleados, clientes }: { empleados: Empleado[]; clientes:
         >
           Asignar a empleado
         </Button>
+      </CardBody>
+    </Card>
+  );
+}
+
+/* ─────────────────────────  Sección: Asignaciones por cliente  ───────────── */
+
+function AsignacionesPorClienteCard({ empleados, clientes }: { empleados: Empleado[]; clientes: ClienteRow[] }) {
+  const toast = useToastStore((s) => s.show);
+  const qc = useQueryClient();
+
+  const [busqueda, setBusqueda] = useState('');
+  const [clienteId, setClienteId] = useState('');
+  const [nuevoEmpleado, setNuevoEmpleado] = useState('');
+
+  const clienteSel = useMemo(() => clientes.find((c) => c.id === clienteId) ?? null, [clientes, clienteId]);
+
+  const resultados = useMemo(() => {
+    if (!busqueda.trim()) return [];
+    return filtrarClientes(clientes, busqueda).slice(0, 20);
+  }, [clientes, busqueda]);
+
+  const { data: asignaciones = [], refetch } = useQuery({
+    queryKey: ['cliente-asignaciones', clienteId],
+    queryFn:  () => api.get(`/clientes/${clienteId}/asignaciones`).then((r) => r.data as RutaAsignacion[]),
+    enabled:  !!clienteId
+  });
+
+  const refrescar = () => {
+    refetch();
+    qc.invalidateQueries({ queryKey: ['rutas'] });
+    qc.invalidateQueries({ queryKey: ['clientes'] });
+  };
+
+  const agregar = useMutation({
+    mutationFn: () => api.post(`/clientes/${clienteId}/asignaciones`, { usuarioIds: [nuevoEmpleado] }).then((r) => r.data),
+    onSuccess: () => { toast('Empleado agregado a la ruta', 'success'); setNuevoEmpleado(''); refrescar(); },
+    onError: (e: any) => toast(e?.response?.data?.error || 'No se pudo agregar', 'error')
+  });
+
+  const quitar = useMutation({
+    mutationFn: (usuarioId: string) => api.delete(`/clientes/${clienteId}/asignaciones/${usuarioId}`).then((r) => r.data),
+    onSuccess: () => { toast('Empleado quitado de la ruta', 'success'); refrescar(); },
+    onError: (e: any) => toast(e?.response?.data?.error || 'No se pudo quitar', 'error')
+  });
+
+  const yaAsignados = new Set(asignaciones.map((a) => a.usuarioId));
+  const disponibles = empleados.filter((e) => !yaAsignados.has(e.id));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <span className="inline-flex items-center gap-2">
+            <Users size={16} className="text-primary-600" />
+            Asignaciones por cliente (varios empleados)
+          </span>
+        </CardTitle>
+        {clienteSel && <Badge tone="info" outline>{asignaciones.length} empleado{asignaciones.length === 1 ? '' : 's'}</Badge>}
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <p className="text-sm text-slate-600">
+          Un mismo cliente puede pertenecer a la ruta de varios empleados a la vez. Agregar o quitar
+          uno <b>no afecta</b> a los demás.
+        </p>
+
+        {/* Buscar / elegir cliente */}
+        <div className="relative max-w-md">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Buscar por nombre o código"
+            value={busqueda}
+            onChange={(e) => { setBusqueda(e.target.value); setClienteId(''); }}
+            className={cn(inputClassName, 'pl-9')}
+          />
+        </div>
+        {busqueda.trim() && !clienteId && (
+          <div className="border border-slate-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-slate-100 max-w-md">
+            {resultados.length === 0
+              ? <p className="px-3 py-4 text-sm text-slate-400">Sin clientes que coincidan.</p>
+              : resultados.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => { setClienteId(c.id); setBusqueda(`${c.identificador ?? ''} ${c.nombre}`.trim()); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 hover:bg-slate-50 text-left"
+                >
+                  <span className="font-mono text-xs text-slate-500 w-14">{c.identificador ?? '—'}</span>
+                  <span className="flex-1 text-sm text-slate-800">{c.nombre}</span>
+                  {c.rutas && c.rutas.length > 0 && <Badge tone="success" outline>{c.rutas.length}</Badge>}
+                </button>
+              ))}
+          </div>
+        )}
+
+        {clienteSel && (
+          <div className="rounded-lg border border-slate-200 p-4 space-y-3 max-w-2xl">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs text-slate-500">{clienteSel.identificador ?? '—'}</span>
+              <span className="font-semibold text-slate-900">{clienteSel.nombre}</span>
+              <button className="ml-auto text-xs text-slate-400 hover:text-slate-600" onClick={() => { setClienteId(''); setBusqueda(''); }}>
+                cambiar
+              </button>
+            </div>
+
+            {/* Chips de empleados asignados */}
+            <div className="flex flex-wrap gap-2">
+              {asignaciones.length === 0
+                ? <span className="text-sm text-slate-400">Sin empleados asignados todavía.</span>
+                : asignaciones.map((a) => (
+                  <span key={a.id} className="inline-flex items-center gap-1.5 rounded-full bg-primary-50 border border-primary-200 pl-3 pr-1.5 py-1 text-sm text-primary-800">
+                    {a.usuario?.nombre ?? a.usuarioId}
+                    <button
+                      onClick={() => quitar.mutate(a.usuarioId)}
+                      disabled={quitar.isPending}
+                      className="rounded-full hover:bg-primary-200 w-5 h-5 inline-flex items-center justify-center text-primary-700"
+                      title="Quitar de la ruta"
+                    >×</button>
+                  </span>
+                ))}
+            </div>
+
+            {/* Agregar empleado */}
+            <div className="flex items-end gap-2">
+              <div className="flex-1 max-w-xs">
+                <Field label="Agregar empleado">
+                  <Select value={nuevoEmpleado} onChange={(e) => setNuevoEmpleado(e.target.value)}>
+                    <option value="">Selecciona un empleado…</option>
+                    {disponibles.map((e) => <option key={e.id} value={e.id}>{e.nombre} ({e.rol})</option>)}
+                  </Select>
+                </Field>
+              </div>
+              <Button disabled={!nuevoEmpleado} loading={agregar.isPending} onClick={() => agregar.mutate()}>
+                Agregar empleado
+              </Button>
+            </div>
+          </div>
+        )}
       </CardBody>
     </Card>
   );
@@ -543,6 +679,7 @@ export default function RutasPage() {
       />
 
       <ImportarExcelCard />
+      <AsignacionesPorClienteCard empleados={empleados} clientes={clientes} />
       <AsignarCard empleados={empleados} clientes={clientes} />
       <RutasActualesCard rutas={rutas} />
     </div>

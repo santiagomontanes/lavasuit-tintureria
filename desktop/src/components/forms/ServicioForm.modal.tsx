@@ -158,7 +158,7 @@ export default function ServicioFormModal({ open, onClose, servicio }: Props) {
         </Field>
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Precio (S/) *" error={tocado && errPrecio ? 'Debe ser un número >= 0' : undefined}>
+          <Field label="Precio (COP) *" error={tocado && errPrecio ? 'Debe ser un número >= 0' : undefined}>
             <Input
               value={form.precio}
               onChange={(e) => setForm((f) => ({ ...f, precio: e.target.value.replace(/[^0-9.,]/g, '') }))}

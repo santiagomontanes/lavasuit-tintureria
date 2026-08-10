@@ -42,6 +42,8 @@ declare global {
       dbQuery: (sql: string, params?: any[]) => Promise<any>;
       dbRun:   (sql: string, params?: any[]) => Promise<any>;
       dbGet:   (sql: string, params?: any[]) => Promise<any>;
+      /** Borra la copia local del escritorio tras "Restablecer operación". */
+      dbResetOperacion?: () => Promise<{ ok: boolean; borradas?: Record<string, number> }>;
     };
     updaterAPI?: {
       getVersion: () => Promise<string>;
@@ -57,6 +59,9 @@ declare global {
       download: () => Promise<{ ok: boolean; mensaje?: string }>;
       install:  () => Promise<{ ok: boolean }>;
       onEvent:  (handler: (ev: UpdaterEvent) => void) => () => void;
+    };
+    shellAPI?: {
+      openPath: (ruta: string) => Promise<string>;
     };
     configAPI?: {
       getSync: () => { apiHost: string; apiPort: number; apiProtocol: 'http' | 'https' };

@@ -1,52 +1,52 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Minus, Trash2, Search } from 'lucide-react';
+import { Loader2, Search } from 'lucide-react';
 import Modal from '../ui/Modal';
 import api from '../../services/api';
 import { useToastStore } from '../../store/toast.store';
+import { formatCurrencyCOP } from '../../lib/currency';
+import ItemsPedidoEditor, {
+  EditorItem, coloresCompletos, itemsPayload
+} from './ItemsPedidoEditor';
+import { useAuthStore } from '../../store/auth.store';
+import { useNavStore } from '../../store/nav.store';
 
 interface Props { open: boolean; onClose: () => void; }
-
-interface ItemPedido {
-  servicioId:     string;
-  servicioNombre: string;
-  nombre:         string;
-  precio:         number;
-  cantidad:       number;
-  colorActual:    string;
-  colorDeseado:   string;
-  observaciones:  string;
-}
 
 export default function NuevoPedidoModal({ open, onClose }: Props) {
   const qc    = useQueryClient();
   const toast = useToastStore();
+  const esAdmin = useAuthStore((s) => s.usuario?.rol === 'ADMIN');
+  const navegar = useNavStore((s) => s.navegar);
 
   const [clienteId,    setClienteId]    = useState<string | null>(null);
-  const [items,        setItems]        = useState<ItemPedido[]>([]);
+  const [items,        setItems]        = useState<EditorItem[]>([]);
+  const [encargado,    setEncargado]    = useState('');
+  const [incluirDeuda, setIncluirDeuda] = useState(false);
   const [notas,        setNotas]        = useState('');
   const [fechaEntrega, setFechaEntrega] = useState('');
   const [busqueda,     setBusqueda]     = useState('');
+  const [mostrarErrores, setMostrarErrores] = useState(false);
 
   useEffect(() => {
     if (open) {
       setClienteId(null);
       setItems([]);
+      setEncargado('');
+      setIncluirDeuda(false);
       setNotas('');
       setFechaEntrega('');
       setBusqueda('');
+      setMostrarErrores(false);
     }
   }, [open]);
+
+  // Al cambiar de cliente, resetear la elección de consolidar deuda.
+  useEffect(() => { setIncluirDeuda(false); }, [clienteId]);
 
   const clientesQ = useQuery({
     queryKey: ['clientes'],
     queryFn:  () => api.get('/clientes').then((r) => r.data as any[]),
-    enabled:  open
-  });
-
-  const serviciosQ = useQuery({
-    queryKey: ['servicios'],
-    queryFn:  () => api.get('/servicios').then((r) => r.data as any[]),
     enabled:  open
   });
 
@@ -63,52 +63,24 @@ export default function NuevoPedidoModal({ open, onClose }: Props) {
   const clienteSeleccionado =
     clientesQ.data?.find((c: any) => c.id === clienteId) ?? null;
 
+  // Deuda anterior del cliente (punto 9). Sólo cuando hay cliente seleccionado.
+  const deudaQ = useQuery({
+    queryKey: ['cliente-deuda', clienteId],
+    queryFn:  () => api.get(`/clientes/${clienteId}/deuda`).then((r) => r.data),
+    enabled:  open && !!clienteId
+  });
+  const deudaAnterior = Number(deudaQ.data?.totalDeuda ?? 0);
+  const hayDeuda = deudaAnterior > 0.001;
+
   const total = useMemo(
     () => items.reduce((acc, i) => acc + i.precio * i.cantidad, 0),
     [items]
   );
 
-  const agregarServicio = (s: any) => {
-    setItems((arr) => {
-      const i = arr.findIndex((x) => x.servicioId === s.id);
-      if (i >= 0) {
-        const next = arr.slice();
-        next[i] = { ...next[i], cantidad: next[i].cantidad + 1 };
-        return next;
-      }
-      return [...arr, {
-        servicioId:     s.id,
-        servicioNombre: s.nombre,
-        nombre:         s.nombre,
-        precio:         Number(s.precio),
-        cantidad:       1,
-        colorActual:    '',
-        colorDeseado:   '',
-        observaciones:  ''
-      }];
-    });
-  };
-
-  const cambiarCantidad = (id: string, delta: number) => {
-    setItems((arr) =>
-      arr
-        .map((i) => i.servicioId === id ? { ...i, cantidad: i.cantidad + delta } : i)
-        .filter((i) => i.cantidad > 0)
-    );
-  };
-
-  const quitarItem = (id: string) => {
-    setItems((arr) => arr.filter((i) => i.servicioId !== id));
-  };
-
-  const actualizarItem = (id: string, patch: Partial<ItemPedido>) => {
-    setItems((arr) => arr.map((i) => i.servicioId === id ? { ...i, ...patch } : i));
-  };
-
   const validarFecha = (s: string) =>
     !s || (/^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)));
 
-  const valid = !!clienteId && items.length > 0 && validarFecha(fechaEntrega);
+  const valid = !!clienteId && items.length > 0 && encargado.trim().length > 0 && validarFecha(fechaEntrega);
 
   const mutation = useMutation({
     mutationFn: (data: any) =>
@@ -116,8 +88,12 @@ export default function NuevoPedidoModal({ open, onClose }: Props) {
     onSuccess: (data: any) => {
       qc.invalidateQueries({ queryKey: ['pedidos'] });
       qc.invalidateQueries({ queryKey: ['reportes'] });
+      qc.invalidateQueries({ queryKey: ['cliente-deuda'] });
       toast.show(`Pedido #${data.numero} creado`, 'success');
       onClose();
+      // Redirección automática al detalle, que es el menú de impresión
+      // (recibo cliente / copia vendedor / PDF).
+      if (data?.id) navegar({ kind: 'pedido-detalle', id: data.id });
     },
     onError: (e: any) => {
       const msg = e?.response?.data?.error || 'No se pudo crear el pedido';
@@ -128,18 +104,16 @@ export default function NuevoPedidoModal({ open, onClose }: Props) {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid) return;
+    if (!coloresCompletos(items)) {
+      setMostrarErrores(true);
+      toast.show('Seleccione color base y color destino en todas las prendas', 'error');
+      return;
+    }
     mutation.mutate({
       clienteId,
-      items: items.map((i) => ({
-        servicioId: i.servicioId,
-        nombre:     i.nombre.trim() || i.servicioNombre,
-        servicioNombre: i.servicioNombre,
-        cantidad:   i.cantidad,
-        precio:     i.precio,
-        colorActual: i.colorActual.trim() || undefined,
-        colorDeseado: i.colorDeseado.trim() || undefined,
-        observaciones: i.observaciones.trim() || undefined
-      })),
+      items:            itemsPayload(items),
+      encargadoEntrega: encargado.trim(),
+      incluirDeudaAnterior: hayDeuda ? incluirDeuda : undefined,
       notas:        notas.trim() || undefined,
       fechaEntrega: fechaEntrega || undefined
     });
@@ -199,99 +173,66 @@ export default function NuevoPedidoModal({ open, onClose }: Props) {
               <span className="text-blue-700">{clienteSeleccionado.telefono}</span>
             </div>
           )}
-        </section>
 
-        {/* Servicios */}
-        <section>
-          <h3 className="font-semibold text-slate-800 mb-2">Nombre de prenda/servicio</h3>
-          <div className="grid grid-cols-3 gap-2 mb-3">
-            {(serviciosQ.data ?? []).map((s: any) => (
-              <button
-                type="button"
-                key={s.id}
-                onClick={() => agregarServicio(s)}
-                className="border border-slate-300 hover:border-blue-500 hover:bg-blue-50 rounded-lg p-2 text-left transition-colors"
-              >
-                <p className="font-medium text-sm truncate">{s.nombre}</p>
-                <p className="text-xs text-blue-600 font-semibold">S/ {Number(s.precio).toFixed(2)}</p>
-              </button>
-            ))}
-          </div>
-
-          {items.length === 0 ? (
-            <p className="text-center text-sm text-slate-400 py-4 border border-dashed border-slate-300 rounded-lg">
-              Pulsa un nombre para agregarlo
-            </p>
-          ) : (
-            <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
-              {items.map((i) => (
-                <div key={i.servicioId} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-3 py-3 items-start">
-                  <div className="flex-1 min-w-0">
-                    <input
-                      value={i.nombre}
-                      onChange={(e) => actualizarItem(i.servicioId, { nombre: e.target.value })}
-                      placeholder="Nombre"
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <p className="text-xs text-slate-500">S/ {i.precio.toFixed(2)} c/u</p>
-                    <div className="grid grid-cols-2 gap-2 mt-2">
-                      <input
-                        value={i.colorActual}
-                        onChange={(e) => actualizarItem(i.servicioId, { colorActual: e.target.value })}
-                        placeholder="Color actual"
-                        className="border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <input
-                        value={i.colorDeseado}
-                        onChange={(e) => actualizarItem(i.servicioId, { colorDeseado: e.target.value })}
-                        placeholder="Color deseado"
-                        className="border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    <textarea
-                      value={i.observaciones}
-                      onChange={(e) => actualizarItem(i.servicioId, { observaciones: e.target.value })}
-                      placeholder="Observaciones del item"
-                      rows={2}
-                      className="mt-2 w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => cambiarCantidad(i.servicioId, -1)}
-                      className="w-7 h-7 rounded-full border border-slate-300 hover:bg-slate-50 flex items-center justify-center"
-                    >
-                      <Minus size={14} />
-                    </button>
-                    <span className="w-7 text-center font-semibold">{i.cantidad}</span>
-                    <button
-                      type="button"
-                      onClick={() => cambiarCantidad(i.servicioId, +1)}
-                      className="w-7 h-7 rounded-full border border-slate-300 hover:bg-slate-50 flex items-center justify-center"
-                    >
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                  <span className="w-24 text-right font-semibold text-green-700">
-                    S/ {(i.precio * i.cantidad).toFixed(2)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => quitarItem(i.servicioId)}
-                    className="text-slate-400 hover:text-red-600"
-                    aria-label="Quitar"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              ))}
+          {/* Deuda anterior del cliente (punto 9) */}
+          {clienteId && hayDeuda && (
+            <div className="mt-2 px-3 py-3 bg-amber-50 border border-amber-300 rounded-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-amber-800">DEUDA ANTERIOR</span>
+                <span className="text-lg font-black text-amber-700">{formatCurrencyCOP(deudaAnterior)}</span>
+              </div>
+              <p className="text-xs text-amber-700 mt-1">
+                {deudaQ.data?.cantidad ?? 0} factura(s) con saldo pendiente.
+              </p>
+              <div className="mt-2 flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="radio" name="incluirDeuda" checked={!incluirDeuda} onChange={() => setIncluirDeuda(false)} />
+                  No incluir deuda anterior
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="radio" name="incluirDeuda" checked={incluirDeuda} onChange={() => setIncluirDeuda(true)} />
+                  Incluir deuda anterior en esta orden
+                </label>
+              </div>
+              {incluirDeuda && (
+                <p className="text-xs text-amber-800 mt-2 font-medium">
+                  Total a pagar: {formatCurrencyCOP(total + deudaAnterior)} (prendas {formatCurrencyCOP(total)} + deuda {formatCurrencyCOP(deudaAnterior)})
+                </p>
+              )}
             </div>
           )}
         </section>
 
+        {/* Prendas */}
+        <section>
+          <h3 className="font-semibold text-slate-800 mb-2">Prendas / servicios</h3>
+          <ItemsPedidoEditor
+            items={items}
+            onChange={setItems}
+            mostrarErrores={mostrarErrores}
+            esAdmin={esAdmin}
+          />
+        </section>
+
         {/* Detalles */}
         <section className="grid grid-cols-2 gap-4">
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">
+              Encargado de entrega <span className="text-red-500">*</span>
+            </span>
+            <input
+              type="text"
+              value={encargado}
+              onChange={(e) => setEncargado(e.target.value)}
+              placeholder="Ej: Juan, María, Carlos"
+              className={`mt-1 w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                mostrarErrores && !encargado.trim() ? 'border-red-400' : 'border-slate-300'
+              }`}
+            />
+            {mostrarErrores && !encargado.trim() && (
+              <span className="text-xs text-red-500">Indique el encargado de entrega</span>
+            )}
+          </label>
           <label className="block">
             <span className="text-sm font-medium text-slate-700">Fecha de entrega</span>
             <input
@@ -316,7 +257,7 @@ export default function NuevoPedidoModal({ open, onClose }: Props) {
         {/* Total */}
         <div className="flex items-center justify-between bg-slate-50 px-4 py-3 rounded-lg">
           <span className="font-medium text-slate-700">Total</span>
-          <span className="text-2xl font-bold text-blue-600">S/ {total.toFixed(2)}</span>
+          <span className="text-2xl font-bold text-blue-600">{formatCurrencyCOP(total)}</span>
         </div>
 
         <div className="flex justify-end gap-3 pt-2">

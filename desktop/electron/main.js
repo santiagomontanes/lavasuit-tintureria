@@ -1,7 +1,9 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path     = require('path');
+const fs       = require('fs');
 const Database = require('better-sqlite3');
 const { setupUpdater } = require('./updater');
+const { autoUpdateBackendIfNeeded } = require('./backend-updater');
 const configStore = require('./config-store');
 const backendInstaller = require('./backend-installer');
 
@@ -60,6 +62,17 @@ app.whenReady().then(() => {
   initDatabase();
   createWindow();
   setupUpdater({ mainWindow, ipcMain, app });
+
+  // Tras actualizar el Desktop (electron-updater), sincronizar el backend
+  // instalado: db push aditivo + generate + PM2 restart + autostart + /health.
+  // No bloquea la UI; solo corre si el backend ya está instalado en este PC.
+  if (app.isPackaged) {
+    setTimeout(() => {
+      autoUpdateBackendIfNeeded({ app }).catch((e) =>
+        console.warn('[backend-updater] fallo no controlado:', e?.message)
+      );
+    }, 6000);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -69,6 +82,57 @@ app.on('window-all-closed', () => {
 ipcMain.handle('db:query', (_, sql, params = []) => db.prepare(sql).all(params));
 ipcMain.handle('db:run',   (_, sql, params = []) => db.prepare(sql).run(params));
 ipcMain.handle('db:get',   (_, sql, params = []) => db.prepare(sql).get(params));
+
+/* Borra la copia LOCAL de datos operativos de este escritorio tras un
+ * "Restablecer operación". Conserva los catálogos (clientes y servicios) igual
+ * que el servidor. La cola local se vacía también: si sobreviviera, volvería a
+ * subir lo que se acaba de borrar. */
+ipcMain.handle('db:reset-operacion', () => {
+  const operativas = ['pedido_items', 'pedidos', 'sync_queue'];
+  const borradas = {};
+  for (const t of operativas) {
+    try {
+      const antes = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get()?.n ?? 0;
+      db.prepare(`DELETE FROM ${t}`).run();
+      borradas[t] = antes;
+    } catch (e) {
+      console.warn('[db:reset-operacion]', t, e?.message);
+    }
+  }
+  console.log('[db:reset-operacion] copia local del escritorio borrada', borradas);
+  return { ok: true, borradas };
+});
+
+// Abrir una carpeta del sistema (p.ej. la carpeta de backups del servidor, si
+// el backend corre en esta misma máquina). Devuelve '' si tuvo éxito.
+ipcMain.handle('shell:open-path', async (_, ruta) => {
+  try {
+    if (!ruta || typeof ruta !== 'string') return 'Ruta inválida';
+    return await shell.openPath(ruta); // '' = ok; string = mensaje de error
+  } catch (e) {
+    return e?.message || 'No se pudo abrir la carpeta';
+  }
+});
+
+/* Guardar una exportación en disco eligiendo la ubicación.
+ * Devuelve la ruta final para que la UI pueda mostrarla. */
+ipcMain.handle('export:guardar-archivo', async (_, { nombreSugerido, datos, filtros } = {}) => {
+  try {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Guardar exportación',
+      defaultPath: path.join(app.getPath('documents'), nombreSugerido || 'export.xlsx'),
+      filters: Array.isArray(filtros) && filtros.length > 0
+        ? filtros
+        : [{ name: 'Libro de Excel', extensions: ['xlsx'] }]
+    });
+    if (canceled || !filePath) return { ok: false, cancelado: true };
+
+    await fs.promises.writeFile(filePath, Buffer.from(datos ?? []));
+    return { ok: true, ruta: filePath };
+  } catch (e) {
+    return { ok: false, error: e?.message || 'No se pudo guardar el archivo' };
+  }
+});
 
 // ─── Configuración runtime del backend (apiHost/apiPort/apiProtocol) ───
 // El renderer lee la config sincrónicamente al arrancar (config:get-sync)

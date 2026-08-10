@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { coloresTexto } from '../lib/itemFormat';
 
 export type FormatoResumen = 'detallado' | 'corto';
 
@@ -12,8 +13,8 @@ interface OpcionesResumen {
   pedidos:   any[];
 }
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../lib/currency';
+const moneda = formatCurrencyCOP;
 
 const esc = (s: any) => String(s ?? '').replace(/[<>&"]/g, (c) => ({
   '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;'
@@ -117,7 +118,7 @@ const bloqueDetallado = (p: any): string => {
           <tr>
             <td><strong>${esc(it?.nombre ?? it?.servicio?.nombre ?? it?.servicioNombre ?? '-')}</strong></td>
             <td>${Number(it?.cantidad ?? 1)}</td>
-            <td>${esc((it?.colorActual ?? '-') + ' → ' + (it?.colorDeseado ?? '-'))}</td>
+            <td>${esc(coloresTexto(it, { upperDestino: true }) || '-')}</td>
             <td class="item">${esc(it?.observaciones ?? '')}</td>
             <td class="right">${esc(moneda(Number(it?.precio ?? 0)))}</td>
             <td class="right">${esc(moneda(Number(it?.subtotal ?? Number(it?.precio ?? 0) * Number(it?.cantidad ?? 1))))}</td>

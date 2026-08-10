@@ -34,14 +34,19 @@ export function marcaTag(item: any): string {
   return limpiar(item?.marcaNombre ?? item?.marca?.nombre ?? '');
 }
 
-export function coloresTexto(item: any, opts: { ascii?: boolean } = {}): string {
-  const flecha = opts.ascii ? '->' : '→';
+export function coloresTexto(
+  item: any,
+  opts: { ascii?: boolean; upperDestino?: boolean } = {}
+): string {
+  const flecha = opts.ascii ? ' -> ' : ' → ';
   const actual = limpiar(item?.colorActual ?? item?.color ?? '');
   const deseado = limpiar(item?.colorDeseado ?? item?.colorFinal ?? '');
-  if (actual && deseado && actual.toLowerCase() !== deseado.toLowerCase()) {
-    return `${actual}${flecha}${deseado}`;
-  }
-  return actual || deseado || '';
+  // Regla UNIFICADA: si hay color destino, SIEMPRE mostrar "base -> DESTINO",
+  // aunque base === destino (ej. "blanco -> BLANCO"). Destino en MAYÚSCULAS.
+  // Nunca colapsar a un solo color cuando existe destino.
+  if (actual && deseado) return `${actual}${flecha}${deseado.toUpperCase()}`;
+  if (deseado) return deseado.toUpperCase();
+  return actual || '';
 }
 
 export function cantidad(item: any): number {
@@ -49,7 +54,10 @@ export function cantidad(item: any): number {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 1;
 }
 
-export function descripcionCompacta(item: any, opts: { ascii?: boolean } = {}): string {
+export function descripcionCompacta(
+  item: any,
+  opts: { ascii?: boolean; upperDestino?: boolean } = {}
+): string {
   const parts: string[] = [];
   parts.push(codigoPrenda(item));
   const marca = marcaTag(item);

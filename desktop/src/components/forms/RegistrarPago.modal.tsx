@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { Field, Input } from '../ui/Input';
 import api from '../../services/api';
 import { useToastStore } from '../../store/toast.store';
 import { cn } from '../../lib/cn';
+import { formatCurrencyCOP } from '../../lib/currency';
 
 const METODOS = ['EFECTIVO', 'NEQUI', 'DAVIPLATA', 'TRANSFERENCIA', 'TARJETA', 'YAPE', 'PLIN'] as const;
 type Metodo = typeof METODOS[number];
@@ -16,9 +17,6 @@ interface Props {
   pedidoId: string;
   saldo:    number;
 }
-
-const fmt = (n: number) =>
-  Number.isFinite(n) ? n.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
 
 export default function RegistrarPagoModal({ open, onClose, pedidoId, saldo }: Props) {
   const qc    = useQueryClient();
@@ -58,33 +56,44 @@ export default function RegistrarPagoModal({ open, onClose, pedidoId, saldo }: P
     }
   });
 
+  const configQ = useQuery({
+    queryKey: ['configuracion-empresa'],
+    queryFn:  () => api.get('/configuracion/empresa').then((r) => r.data),
+    enabled:  open
+  });
+  const solicitarRecibido = configQ.data?.solicitarMontoRecibido ?? true;
+
   const montoNum    = Number(monto.replace(',', '.'));
   const recibidoNum = Number(recibido.replace(',', '.'));
   const validNumero = Number.isFinite(montoNum) && montoNum > 0;
   const cabeEnSaldo = validNumero && montoNum <= saldo + 0.0001;
   const aplicaEfectivo = metodo === 'EFECTIVO';
-  const vueltas = aplicaEfectivo && Number.isFinite(recibidoNum) ? recibidoNum - montoNum : 0;
+  // Si NO se solicita el recibido: en efectivo, recibido = pagado y vueltas = 0.
+  const mostrarRecibido = aplicaEfectivo && solicitarRecibido;
+  const vueltas = mostrarRecibido && Number.isFinite(recibidoNum) ? recibidoNum - montoNum : 0;
 
   const cubreTotal = validNumero && Math.abs(saldo - montoNum) < 0.0001;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validNumero) { toast.show('Monto invalido', 'error'); return; }
-    if (!cabeEnSaldo) { toast.show(`El monto supera el saldo (S/ ${fmt(saldo)})`, 'error'); return; }
+    if (!cabeEnSaldo) { toast.show(`El monto supera el saldo (${formatCurrencyCOP(saldo)})`, 'error'); return; }
     mutation.mutate({ pedidoId, monto: montoNum, metodo });
   };
 
   const error = monto && !validNumero
     ? 'Monto invalido'
     : monto && validNumero && !cabeEnSaldo
-      ? `No puede superar el saldo (S/ ${fmt(saldo)})`
+      ? `No puede superar el saldo (${formatCurrencyCOP(saldo)})`
       : undefined;
 
   const resumen = useMemo(() => ({
     total:   saldo, // saldo a cobrar (no incluye lo ya pagado)
     cobrar:  validNumero ? montoNum : 0,
-    recibido: aplicaEfectivo && Number.isFinite(recibidoNum) ? recibidoNum : 0
-  }), [saldo, validNumero, montoNum, aplicaEfectivo, recibidoNum]);
+    recibido: aplicaEfectivo
+      ? (mostrarRecibido ? (Number.isFinite(recibidoNum) ? recibidoNum : 0) : (validNumero ? montoNum : 0))
+      : 0
+  }), [saldo, validNumero, montoNum, aplicaEfectivo, recibidoNum, mostrarRecibido]);
 
   return (
     <Modal open={open} onClose={onClose} title="Registrar pago" subtitle="Solo se registra el valor a cobrar, no el dinero recibido.">
@@ -92,23 +101,23 @@ export default function RegistrarPagoModal({ open, onClose, pedidoId, saldo }: P
         <div className="bg-primary-50/70 border border-primary-100 px-4 py-3 rounded-xl grid grid-cols-3 gap-3 text-sm">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Saldo</p>
-            <p className="num font-bold text-slate-900 mt-0.5">S/ {fmt(saldo)}</p>
+            <p className="num font-bold text-slate-900 mt-0.5">{formatCurrencyCOP(saldo)}</p>
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">A cobrar</p>
-            <p className="num font-bold text-primary-700 mt-0.5">S/ {fmt(resumen.cobrar)}</p>
+            <p className="num font-bold text-primary-700 mt-0.5">{formatCurrencyCOP(resumen.cobrar)}</p>
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recibido</p>
             <p className="num font-bold text-slate-900 mt-0.5">
-              {aplicaEfectivo ? `S/ ${fmt(resumen.recibido)}` : '—'}
+              {aplicaEfectivo ? formatCurrencyCOP(resumen.recibido) : '—'}
             </p>
           </div>
         </div>
 
         <Field label="Valor a cobrar *" error={error}>
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">S/</span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
             <Input
               type="text"
               inputMode="decimal"
@@ -141,10 +150,10 @@ export default function RegistrarPagoModal({ open, onClose, pedidoId, saldo }: P
           </div>
         </div>
 
-        {aplicaEfectivo && (
+        {mostrarRecibido && (
           <Field label="Dinero recibido (solo efectivo)" hint="Si el cliente paga con un billete mayor, calculamos las vueltas. El pago registrado es solo el valor a cobrar.">
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">S/</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
               <Input
                 type="text"
                 inputMode="decimal"
@@ -157,7 +166,7 @@ export default function RegistrarPagoModal({ open, onClose, pedidoId, saldo }: P
           </Field>
         )}
 
-        {aplicaEfectivo && Number.isFinite(recibidoNum) && validNumero && (
+        {mostrarRecibido && Number.isFinite(recibidoNum) && validNumero && (
           <div className={cn(
             'flex items-center justify-between px-4 py-3 rounded-xl border',
             vueltas >= 0
@@ -167,7 +176,7 @@ export default function RegistrarPagoModal({ open, onClose, pedidoId, saldo }: P
             <span className="text-sm font-semibold">
               {vueltas >= 0 ? 'Vueltas a devolver' : 'Falta'}
             </span>
-            <span className="num text-xl font-bold">S/ {fmt(Math.abs(vueltas))}</span>
+            <span className="num text-xl font-bold">{formatCurrencyCOP(Math.abs(vueltas))}</span>
           </div>
         )}
 

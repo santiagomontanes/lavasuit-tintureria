@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileSpreadsheet, Package, Pencil, Plus, PowerOff, Power, Search, Star, Tags, Trash2, UserRound } from 'lucide-react';
 import api from '../services/api';
+import { formatCurrencyCOP } from '../lib/currency';
 import PageHeader from '../components/ui/PageHeader';
 import Badge from '../components/ui/Badge';
 import EmptyState from '../components/ui/EmptyState';
@@ -283,7 +284,7 @@ export default function ServiciosPage() {
                   </TD>
                   <TD>{s.categoria ?? <span className="text-slate-400">—</span>}</TD>
                   <TD>
-                    <span className="num font-semibold text-slate-900">S/ {Number(s.precio).toFixed(2)}</span>
+                    <span className="num font-semibold text-slate-900">{formatCurrencyCOP(s.precio)}</span>
                   </TD>
                   <TD><span className="text-slate-700">{s.unidad}</span></TD>
                   <TD>
@@ -359,7 +360,7 @@ export default function ServiciosPage() {
                 {s.descripcion && (
                   <p className="text-sm text-slate-600 mt-2 line-clamp-2">{s.descripcion}</p>
                 )}
-                <p className="num mt-4 text-3xl font-semibold text-primary-700">S/ {Number(s.precio).toFixed(2)}</p>
+                <p className="num mt-4 text-3xl font-semibold text-primary-700">{formatCurrencyCOP(s.precio)}</p>
                 <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
                   <span className="text-xs text-slate-500">Unidad</span>
                   <span className="text-sm font-medium text-slate-900">{s.unidad}</span>

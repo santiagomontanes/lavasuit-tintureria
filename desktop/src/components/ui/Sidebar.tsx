@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  LayoutDashboard, ShoppingBag, Users, Package, LogOut, Route, Banknote, UserCog, Settings, Tag, Palette
+  LayoutDashboard, ShoppingBag, Users, Package, LogOut, Route, Banknote, UserCog, Settings, Tag, Palette, BarChart3, Wallet
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth.store';
 import { useNavStore, View } from '../../store/nav.store';
@@ -23,6 +23,8 @@ const items: Item[] = [
   { id: 'marcas',    label: 'Marcas',    icon: Tag             },
   { id: 'colores',   label: 'Colores',   icon: Palette         },
   { id: 'caja',      label: 'Caja',      icon: Banknote        },
+  { id: 'gastos',    label: 'Gastos',    icon: Wallet          },
+  { id: 'reportes',  label: 'Reportes',  icon: BarChart3, soloAdmin: true },
   { id: 'empleados', label: 'Usuarios', icon: UserCog, soloAdmin: true },
   { id: 'configuracion', label: 'Configuración', icon: Settings, soloAdmin: true }
 ];

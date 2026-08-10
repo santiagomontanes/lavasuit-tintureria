@@ -24,6 +24,20 @@ const enviar = (canal, payload) => {
   }
 };
 
+/* GitHub `/releases/latest` solo devuelve releases de PRODUCCIÓN (no prereleases
+ * ni drafts). Si el repo aún no tiene una release estable (p. ej. solo hay una
+ * prerelease de prueba, o ninguna), electron-updater lanza un error tipo
+ * "Unable to find latest version on GitHub / please ensure a production release
+ * exists" (a veces con HttpError 404/406). NO es un fallo real: simplemente no
+ * hay actualización estable disponible. Lo tratamos como "sin actualización"
+ * para no asustar al usuario ni a los clientes. */
+const esSinReleaseProduccion = (err) => {
+  const msg = `${err?.message ?? err ?? ''}`;
+  return /unable to find latest version|please ensure a production release|cannot parse releases feed|releases\/latest/i.test(msg)
+    || /HttpError:\s*4(0[46])/i.test(msg)   // 404 (no latest) o 406 del feed
+    || err?.statusCode === 404 || err?.statusCode === 406;
+};
+
 const registrarListeners = () => {
   autoUpdater.on('checking-for-update', () => {
     enviar('updater:event', { tipo: 'checking' });
@@ -35,6 +49,13 @@ const registrarListeners = () => {
     enviar('updater:event', { tipo: 'not-available', version: info.version });
   });
   autoUpdater.on('error', (err) => {
+    // "Sin release de producción" no es un error para el usuario: es que no hay
+    // versión estable publicada todavía (solo prerelease/ninguna).
+    if (esSinReleaseProduccion(err)) {
+      log.info('[updater] sin release de producción todavía; se ignora (no hay actualización estable).');
+      enviar('updater:event', { tipo: 'not-available', motivo: 'sin-release-produccion' });
+      return;
+    }
     enviar('updater:event', { tipo: 'error', message: err?.message ?? String(err) });
   });
   autoUpdater.on('download-progress', (progress) => {
@@ -80,6 +101,17 @@ const setupUpdater = ({ mainWindow, ipcMain, app }) => {
         releaseDate:    res?.updateInfo?.releaseDate ?? null
       };
     } catch (e) {
+      // Sin release estable publicada → no es error, es "estás al día".
+      if (esSinReleaseProduccion(e)) {
+        return {
+          ok: true,
+          updateAvailable: false,
+          currentVersion: app.getVersion(),
+          latestVersion: app.getVersion(),
+          motivo: 'sin-release-produccion',
+          mensaje: 'No hay una versión más reciente publicada.'
+        };
+      }
       return { ok: false, motivo: 'error', mensaje: e?.message ?? String(e) };
     }
   });

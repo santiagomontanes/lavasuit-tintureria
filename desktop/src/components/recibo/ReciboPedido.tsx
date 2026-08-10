@@ -1,10 +1,9 @@
 import React from 'react';
 import dayjs from 'dayjs';
-import { printHtml } from '../../utils/print';
 import { codigoPrenda, marcaTag, coloresTexto, observacionTexto } from '../../lib/itemFormat';
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../../lib/currency';
+const moneda = formatCurrencyCOP;
 
 export type TipoRecibo = 'cliente' | 'vendedor';
 
@@ -12,19 +11,63 @@ interface Props {
   pedido: any;
   tipo:   TipoRecibo;
   pagado: number;
+  /** Flag de Opciones Avanzadas: si es false, oculta el nombre de la empresa
+   *  (deja solo fecha/encabezado). Default true = comportamiento actual. */
+  mostrarNombre?: boolean;
+  /** Flag: si es true, muestra el desglose de la deuda consolidada y el "Total
+   *  a pagar". Default false. Solo afecta visualización. */
+  mostrarConsolidada?: boolean;
+}
+
+/* Resumen económico unificado (puntos 1 y 9).
+ *  - total factura = valor de las prendas (pedido.total).
+ *  - deuda anterior = pedido.deudaConsolidada (deuda consolidada en esta orden).
+ *  - total a pagar = total factura + deuda anterior.
+ *  - abono = pagos recibidos.
+ *  - deuda = total factura - abono (de esta orden).
+ *  - saldo total = total a pagar - abono (obligación final pendiente). */
+export function calcResumenRecibo(pedido: any, pagado: number) {
+  const totalFactura  = Number(pedido?.total ?? 0);
+  const deudaAnterior = Number(pedido?.deudaConsolidada ?? 0);
+  const totalAPagar   = totalFactura + deudaAnterior;
+  const abono         = Number(pagado ?? 0);
+  // Factura ORIGEN consolidada: su saldo se migró a la orden destino y se cobra
+  // allá. Aquí se muestra saldo 0 y la referencia a la factura destino.
+  const esOrigenConsolidado = !!pedido?.consolidadoEnPedidoId;
+  const consolidadoEnNumero = pedido?.consolidadoEn?.numero ?? null;
+  // Nota: la línea "DEUDA" se eliminó del ticket impreso a pedido del cliente.
+  const saldoTotal    = esOrigenConsolidado ? 0 : Math.max(0, totalAPagar - abono);
+  return {
+    totalFactura, deudaAnterior, totalAPagar, abono, saldoTotal,
+    esOrigenConsolidado, consolidadoEnNumero
+  };
+}
+
+const encargadoTexto = (pedido: any): string =>
+  (pedido?.encargadoEntrega && String(pedido.encargadoEntrega).trim()) || 'No registrado';
+
+/* Desglose de la deuda anterior consolidada (filas ConsolidacionDeuda). */
+function consolidacionesDe(pedido: any): any[] {
+  return pedido?.consolidacionesDestino ?? pedido?.consolidaciones ?? [];
 }
 
 // ─── Generador de HTML para impresión ────────────────────────────────────────
 
-export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number): string {
-  const total    = Number(pedido?.total ?? 0);
-  const saldo    = Math.max(0, total - pagado);
+export function generarHtmlRecibo(
+  pedido: any, tipo: TipoRecibo, pagado: number,
+  opts: { mostrarNombre?: boolean; mostrarConsolidada?: boolean } = {}
+): string {
+  const mostrarNombre = opts.mostrarNombre !== false;
+  const mostrarConsolidada = opts.mostrarConsolidada === true;
+  const r        = calcResumenRecibo(pedido, pagado);
   const cliente  = pedido?.cliente ?? {};
   const items    = pedido?.items  ?? [];
   const pagos    = pedido?.pagos  ?? [];
   const empleado = pedido?.usuario?.nombre ?? '—';
   const numero   = pedido?.numero ?? pedido?.id?.slice(0, 8) ?? '—';
   const fecha    = dayjs(pedido?.createdAt).format('DD/MM/YYYY HH:mm');
+  const hayDeuda = r.deudaAnterior > 0.001;
+  const consolidaciones = consolidacionesDe(pedido);
 
   const esCliente = tipo === 'cliente';
   const titulo    = esCliente ? 'RECIBO DE ORDEN' : 'COPIA RECOLECTOR / VENDEDOR';
@@ -32,7 +75,7 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
   const filaItems = items.map((it: any) => {
     const codigo  = codigoPrenda(it);
     const marca   = marcaTag(it);
-    const colores = coloresTexto(it);
+    const colores = coloresTexto(it, { upperDestino: true });
     const obs     = observacionTexto(it);
     const prendaCell = `<strong>${codigo}</strong>${marca ? ` <span style="color:#64748b">${marca}</span>` : ''}`;
     return `
@@ -46,28 +89,58 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
   `;
   }).join('');
 
+  // En recibo vendedor NO se imprime el método de pago (a pedido del cliente).
   const filaPagos = pagos.map((p: any) => `
     <tr>
-      <td style="padding:4px 8px;">${p.metodo}</td>
+      ${esCliente ? `<td style="padding:4px 8px;">${p.metodo}</td>` : ''}
       <td style="padding:4px 8px;text-align:right;font-weight:600;">${moneda(Number(p.monto))}</td>
       <td style="padding:4px 8px;color:#64748b;">${dayjs(p.createdAt).format('DD/MM HH:mm')}</td>
       ${!esCliente ? `<td style="padding:4px 8px;color:#64748b;">${p.usuario?.nombre ?? '—'}</td>` : ''}
     </tr>
   `).join('');
 
-  // Unificado: una sola columna "Colores".
   const headersItems =
     '<th>Prenda</th><th>Cant.</th><th>Colores</th><th>Obs.</th><th>Subtotal</th>';
+
+  const filasConsolidacion = consolidaciones.map((c: any) => {
+    const ord = c?.pedidoOrigen?.numero != null
+      ? `Factura #${c.pedidoOrigen.numero}`
+      : (c?.pedidoOrigen?.numeroLocal ?? 'Factura anterior');
+    return `<div class="total-row"><span>${ord}</span><span>${moneda(Number(c.montoConsolidado ?? 0))}</span></div>`;
+  }).join('');
+
+  // Bloque de resumen económico (puntos 1 y 9). El flag mostrarConsolidada solo
+  // afecta la VISUALIZACIÓN (Total a pagar + desglose); los números no cambian.
+  const lineaAbono = `<div class="total-row"><span>Abono</span><span style="color:#15803d;font-weight:700;">${moneda(r.abono)}</span></div>`;
+  const lineaDeudaAnterior = `<div class="total-row"><span>Deuda anterior</span><span style="color:#b45309;font-weight:700;">${moneda(r.deudaAnterior)}</span></div>`;
+  const resumenHtml = `
+    <div class="seccion-titulo">Resumen financiero</div>
+    <div class="total-row main"><span>Total factura</span><span>${moneda(r.totalFactura)}</span></div>
+    ${hayDeuda ? (mostrarConsolidada ? `
+      ${lineaDeudaAnterior}
+      <div class="total-row main"><span>Total a pagar</span><span>${moneda(r.totalAPagar)}</span></div>
+      ${lineaAbono}
+    ` : `
+      ${lineaDeudaAnterior}
+      ${lineaAbono}
+    `) : `
+      ${lineaAbono}
+    `}
+    <div class="total-row saldo"><span>Saldo total</span><span>${moneda(r.saldoTotal)}</span></div>
+    ${r.esOrigenConsolidado
+      ? `<div style="margin-top:6px;font-size:11px;font-weight:700;color:#92400e;">Saldo consolidado en factura ${r.consolidadoEnNumero != null ? `#${r.consolidadoEnNumero}` : 'destino'}</div>`
+      : `<div><span class="estado-badge">${r.saldoTotal < 0.001 ? '✓ PAGADO' : 'PENDIENTE DE PAGO'}</span></div>`}
+  `;
 
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>${titulo} #${numero}</title>
+  <title>${titulo}${esCliente ? '' : ` #${numero}`}</title>
   <style>
     @page { size: A4; margin: 18mm 18mm 22mm 18mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, Helvetica, sans-serif; font-size: 11.5px; color: #1a1a1a; line-height: 1.45; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 12.5px; color: #1a1a1a; line-height: 1.45; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
     .empresa-nombre { font-size: 22px; font-weight: 900; color: #0f172a; letter-spacing: -0.5px; }
     .empresa-sub    { font-size: 11px; color: #64748b; margin-top: 2px; }
@@ -81,8 +154,8 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
       background: ${esCliente ? '#dcfce7' : '#fef3c7'};
       color: ${esCliente ? '#15803d' : '#92400e'};
     }
-    hr { border: none; border-top: 2px solid #0f172a; margin: 10px 0; }
-    .hr-thin { border: none; border-top: 1px solid #e2e8f0; margin: 8px 0; }
+    hr { border: none; border-top: 3px solid #0f172a; margin: 12px 0; }
+    .hr-thin { border: none; border-top: 2px solid #64748b; margin: 8px 0; }
     .seccion { margin-bottom: 16px; }
     .seccion-titulo { font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px;
                       color: #64748b; margin-bottom: 6px; }
@@ -97,23 +170,19 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
          text-transform: uppercase; letter-spacing: 0.4px; }
     .totales-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; margin-top: 12px; }
     .total-row    { display: flex; justify-content: space-between; padding: 5px 0;
-                    border-bottom: 1px solid #f1f5f9; font-size: 12px; }
-    .total-row.main { border-bottom: 2px solid #0f172a; padding: 8px 0; font-weight: 900; font-size: 14px; }
-    .total-row.saldo { font-weight: 900; color: ${saldo > 0.001 ? '#b45309' : '#15803d'}; }
+                    border-bottom: 1px solid #cbd5e1; font-size: 13px; }
+    .total-row.main { border-bottom: 3px solid #0f172a; padding: 8px 0; font-weight: 900; font-size: 15px; }
+    .total-row.saldo { font-weight: 900; color: ${r.saldoTotal > 0.001 ? '#b45309' : '#15803d'}; }
     .estado-badge { display: inline-block; padding: 4px 14px; border-radius: 20px; font-size: 12px;
                     font-weight: 900; margin-top: 8px;
-                    background: ${saldo < 0.001 ? '#dcfce7' : '#fef3c7'};
-                    color: ${saldo < 0.001 ? '#15803d' : '#92400e'}; }
+                    background: ${r.saldoTotal < 0.001 ? '#dcfce7' : '#fef3c7'};
+                    color: ${r.saldoTotal < 0.001 ? '#15803d' : '#92400e'}; }
     .politicas { margin-top: 18px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0;
-                 border-radius: 6px; font-size: 10.5px; color: #475569; }
-    .firma-box { margin-top: 18px; display: flex; gap: 30px; }
-    .firma-linea { flex: 1; text-align: center; }
-    .firma-linea .linea { border-bottom: 1px solid #334155; margin-bottom: 4px; height: 32px; }
-    .firma-linea p { font-size: 10px; color: #64748b; }
-    .control-interno { margin-top: 18px; padding: 10px 12px; background: #fffbeb;
-                       border: 1px dashed #fcd34d; border-radius: 6px; }
-    .control-interno p { font-size: 10.5px; color: #78350f; margin-bottom: 4px; font-weight: 700; }
-    .control-interno .linea-ctrl { border-bottom: 1px dashed #fcd34d; height: 22px; margin-top: 8px; }
+                 border-radius: 6px; font-size: 11px; color: #475569; }
+    .consolidacion { margin-top: 12px; padding: 10px 12px; background: #fffbeb;
+                     border: 1px solid #fcd34d; border-radius: 6px; }
+    .consolidacion .titulo { font-size: 11px; font-weight: 900; color: #92400e; margin-bottom: 6px;
+                             text-transform: uppercase; letter-spacing: 0.4px; }
     @media print {
       body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
     }
@@ -124,12 +193,12 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
   <!-- Encabezado -->
   <div class="header">
     <div>
-      <div class="empresa-nombre">LavaSuit</div>
-      <div class="empresa-sub">Servicio de lavandería profesional</div>
+      ${mostrarNombre ? `<div class="empresa-nombre">LavaSuit</div>
+      <div class="empresa-sub">Servicio de lavandería profesional</div>` : ''}
     </div>
     <div class="recibo-titulo">
       <h2>${titulo}</h2>
-      <div class="num-orden">#${numero}</div>
+      ${esCliente ? '' : `<div class="num-orden">#${numero}</div>`}
       <div class="fecha">${fecha}</div>
     </div>
   </div>
@@ -142,7 +211,9 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
     ${cliente.identificador ? `<div class="cliente-id">${cliente.identificador}</div>` : ''}
     <div class="cliente-grid">
       <div class="campo"><label>Nombre</label><span>${cliente.nombre ?? '—'}</span></div>
+      <div class="campo"><label>Encargado</label><span>${encargadoTexto(pedido)}</span></div>
       <div class="campo"><label>Teléfono</label><span>${cliente.telefono ?? '—'}</span></div>
+      <div class="campo"><label>Cantidad de prendas</label><span>${items.reduce((acc: number, it: any) => acc + Number(it.cantidad), 0)}</span></div>
       ${cliente.direccion ? `<div class="campo" style="grid-column:1/-1"><label>Dirección</label><span>${cliente.direccion}</span></div>` : ''}
     </div>
   </div>
@@ -170,14 +241,19 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
     </table>
   </div>
 
+  ${hayDeuda && mostrarConsolidada && consolidaciones.length > 0 ? `
+  <div class="consolidacion">
+    <div class="titulo">Deuda anterior consolidada</div>
+    ${filasConsolidacion}
+    <div class="total-row main" style="border-bottom:none;"><span>Total consolidado</span><span>${moneda(r.deudaAnterior)}</span></div>
+  </div>
+  ` : ''}
+
+  <hr/>
   <!-- Totales -->
   <div class="totales-grid">
     <div>
-      <div class="seccion-titulo">Resumen financiero</div>
-      <div class="total-row main"><span>Valor total ordenado</span><span>${moneda(total)}</span></div>
-      <div class="total-row"><span>Abono / Pagos recibidos</span><span style="color:#15803d;font-weight:700;">${moneda(pagado)}</span></div>
-      <div class="total-row saldo"><span>Saldo pendiente</span><span>${moneda(saldo)}</span></div>
-      <div><span class="estado-badge">${saldo < 0.001 ? '✓ PAGADO' : 'PENDIENTE DE PAGO'}</span></div>
+      ${resumenHtml}
     </div>
 
     ${pagos.length > 0 ? `
@@ -186,7 +262,7 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
       <table>
         <thead>
           <tr>
-            <th>Método</th><th style="text-align:right">Monto</th><th>Fecha</th>
+            ${esCliente ? '<th>Método</th>' : ''}<th style="text-align:right">Monto</th><th>Fecha</th>
             ${!esCliente ? '<th>Cobrador</th>' : ''}
           </tr>
         </thead>
@@ -196,6 +272,7 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
     ` : '<div></div>'}
   </div>
 
+  <hr/>
   ${esCliente ? `
   <!-- Políticas -->
   <div class="politicas">
@@ -204,37 +281,11 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
     no reclamadas después de 30 días. En caso de cualquier inconformidad, comunicarse dentro de las
     48 horas de recibida la entrega.
   </div>
-  <div class="firma-box">
-    <div class="firma-linea">
-      <div class="linea"></div>
-      <p>Firma del cliente / Recibido conforme</p>
-    </div>
-    <div class="firma-linea">
-      <div class="linea"></div>
-      <p>Sello / Firma LavaSuit</p>
-    </div>
-  </div>
   ` : `
-  <!-- Control interno -->
   ${pedido?.notas ? `<div class="seccion"><div class="seccion-titulo">Observaciones del pedido</div><p style="font-size:11px;color:#334155;">${pedido.notas}</p></div>` : ''}
-  <div class="control-interno">
-    <p>Control interno — uso exclusivo recolector</p>
-    <div style="display:flex;gap:20px;margin-top:6px;">
-      <div style="flex:1">
-        <div style="font-size:10px;color:#92400e;">Estado de sincronización</div>
-        <div style="font-weight:700;">${pedido?.sincronizado ? 'Sincronizado ✓' : 'Pendiente de sincronización'}</div>
-      </div>
-      <div style="flex:1">
-        <div style="font-size:10px;color:#92400e;">ID sistema</div>
-        <div style="font-family:monospace;font-size:10px;">${pedido?.id?.slice(0, 16) ?? '—'}…</div>
-      </div>
-    </div>
-    <div class="linea-ctrl"></div>
-    <div class="linea-ctrl"></div>
-  </div>
   `}
 
-  <div style="margin-top:14px;padding-top:8px;border-top:1px solid #e2e8f0;text-align:center;font-size:9px;color:#94a3b8;line-height:1.4;">
+  <div style="margin-top:14px;padding-top:8px;border-top:2px solid #64748b;text-align:center;font-size:9px;color:#94a3b8;line-height:1.4;">
     Software diseñado por <strong style="color:#64748b">SISTETECNI</strong><br/>
     LavaSuit — Software para Tintorerías y Lavanderías
   </div>
@@ -245,27 +296,33 @@ export function generarHtmlRecibo(pedido: any, tipo: TipoRecibo, pagado: number)
 
 // ─── Componente React para preview ───────────────────────────────────────────
 
-export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
-  const total  = Number(pedido?.total ?? 0);
-  const saldo  = Math.max(0, total - pagado);
-  const items  = pedido?.items   ?? [];
-  const pagos  = pedido?.pagos   ?? [];
+export default function ReciboPedido({ pedido, tipo, pagado, mostrarNombre = true, mostrarConsolidada = false }: Props) {
+  const r       = calcResumenRecibo(pedido, pagado);
+  const items   = pedido?.items   ?? [];
+  const pagos   = pedido?.pagos   ?? [];
   const cliente = pedido?.cliente ?? {};
   const esCliente = tipo === 'cliente';
+  const hayDeuda  = r.deudaAnterior > 0.001;
+  const consolidaciones = consolidacionesDe(pedido);
+  const totalPrendas = items.reduce((acc: number, it: any) => acc + Number(it.cantidad), 0);
 
   return (
     <div className="font-sans text-sm text-slate-900 max-w-2xl mx-auto">
       {/* Encabezado */}
       <div className="flex justify-between items-start mb-4">
         <div>
-          <p className="text-2xl font-black text-slate-900 tracking-tight">LavaSuit</p>
-          <p className="text-xs text-slate-500">Servicio de lavandería profesional</p>
+          {mostrarNombre && (
+            <>
+              <p className="text-2xl font-black text-slate-900 tracking-tight">LavaSuit</p>
+              <p className="text-xs text-slate-500">Servicio de lavandería profesional</p>
+            </>
+          )}
         </div>
         <div className="text-right">
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
             {esCliente ? 'Recibo de orden' : 'Copia recolector / vendedor'}
           </p>
-          <p className="text-2xl font-black text-sky-600">#{pedido?.numero ?? '—'}</p>
+          {!esCliente && <p className="text-2xl font-black text-sky-600">#{pedido?.numero ?? '—'}</p>}
           <p className="text-xs text-slate-500">
             {dayjs(pedido?.createdAt).format('DD/MM/YYYY HH:mm')}
           </p>
@@ -276,7 +333,7 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
         ${esCliente ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
         {esCliente ? 'Copia cliente' : 'Copia interna'}
       </div>
-      <hr className="border-slate-900 border-t-2 mb-4" />
+      <hr className="border-slate-900 border-t-[3px] mb-4" />
 
       {/* Cliente */}
       <div className="mb-4">
@@ -288,7 +345,9 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
         )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1">
           <div><span className="text-xs text-slate-500">Nombre</span><p className="font-semibold">{cliente.nombre ?? '—'}</p></div>
+          <div><span className="text-xs text-slate-500">Encargado</span><p className="font-semibold">{encargadoTexto(pedido)}</p></div>
           <div><span className="text-xs text-slate-500">Teléfono</span><p className="font-semibold">{cliente.telefono ?? '—'}</p></div>
+          <div><span className="text-xs text-slate-500">Cantidad de prendas</span><p className="font-semibold">{totalPrendas}</p></div>
           {cliente.direccion && (
             <div className="col-span-2"><span className="text-xs text-slate-500">Dirección</span><p className="font-semibold">{cliente.direccion}</p></div>
           )}
@@ -319,7 +378,7 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
             {items.map((it: any, i: number) => {
               const codigo  = codigoPrenda(it);
               const marca   = marcaTag(it);
-              const colores = coloresTexto(it);
+              const colores = coloresTexto(it, { upperDestino: true });
               const obs     = observacionTexto(it);
               return (
                 <tr key={it.id ?? i} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
@@ -338,26 +397,66 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
         </table>
       </div>
 
+      {hayDeuda && mostrarConsolidada && consolidaciones.length > 0 && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-300 rounded-lg">
+          <p className="text-xs font-bold uppercase tracking-wide text-amber-800 mb-2">Deuda anterior consolidada</p>
+          {consolidaciones.map((c: any, i: number) => (
+            <div key={c.id ?? i} className="flex justify-between text-sm">
+              <span>{c?.pedidoOrigen?.numero != null ? `Factura #${c.pedidoOrigen.numero}` : (c?.pedidoOrigen?.numeroLocal ?? 'Factura anterior')}</span>
+              <span>{moneda(Number(c.montoConsolidado ?? 0))}</span>
+            </div>
+          ))}
+          <div className="flex justify-between text-sm font-black border-t border-amber-300 mt-1 pt-1">
+            <span>Total consolidado</span><span>{moneda(r.deudaAnterior)}</span>
+          </div>
+        </div>
+      )}
+
+      <hr className="border-slate-900 border-t-[3px] my-4" />
       {/* Totales */}
       <div className="grid grid-cols-2 gap-6">
         <div>
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">Resumen financiero</p>
           <div className="space-y-1 border-t-2 border-slate-900 pt-2">
-            <div className="flex justify-between text-sm font-bold">
-              <span>Valor total ordenado</span><span>{moneda(total)}</span>
+            <div className="flex justify-between text-sm font-black">
+              <span>Total factura</span><span>{moneda(r.totalFactura)}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-600">Pagos recibidos</span>
-              <span className="text-green-700 font-semibold">{moneda(pagado)}</span>
-            </div>
-            <div className={`flex justify-between text-sm font-bold pt-1 border-t border-slate-200 ${saldo > 0.001 ? 'text-amber-700' : 'text-green-700'}`}>
-              <span>Saldo pendiente</span><span>{moneda(saldo)}</span>
+            {hayDeuda && (
+              <div className="flex justify-between text-sm">
+                <span className="text-amber-700">Deuda anterior</span>
+                <span className="text-amber-700 font-semibold">{moneda(r.deudaAnterior)}</span>
+              </div>
+            )}
+            {hayDeuda && mostrarConsolidada ? (
+              <>
+                <div className="flex justify-between text-sm font-black border-t border-slate-200 pt-1">
+                  <span>Total a pagar</span><span>{moneda(r.totalAPagar)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-600">Abono</span>
+                  <span className="text-green-700 font-semibold">{moneda(r.abono)}</span>
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between text-sm">
+                <span className="text-slate-600">Abono</span>
+                <span className="text-green-700 font-semibold">{moneda(r.abono)}</span>
+              </div>
+            )}
+            <div className={`flex justify-between text-sm font-black pt-1 border-t border-slate-200 ${r.saldoTotal > 0.001 ? 'text-amber-700' : 'text-green-700'}`}>
+              <span>Saldo total</span><span>{moneda(r.saldoTotal)}</span>
             </div>
           </div>
-          <div className={`mt-2 text-xs font-bold uppercase px-3 py-1 rounded-full inline-block
-            ${saldo < 0.001 ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-            {saldo < 0.001 ? '✓ Pagado' : 'Pendiente de pago'}
-          </div>
+          {r.esOrigenConsolidado ? (
+            <div className="mt-2 text-xs font-bold text-amber-700">
+              Saldo consolidado en factura {r.consolidadoEnNumero != null ? `#${r.consolidadoEnNumero}` : 'destino'}
+            </div>
+          ) : (
+            <div className={`mt-2 text-xs font-bold uppercase px-3 py-1 rounded-full inline-block
+              ${r.saldoTotal < 0.001 ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+              {r.saldoTotal < 0.001 ? '✓ Pagado' : 'Pendiente de pago'}
+            </div>
+          )}
         </div>
 
         {pagos.length > 0 && (
@@ -366,14 +465,14 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-100">
-                  <th className="p-1 text-left">Método</th>
+                  {esCliente && <th className="p-1 text-left">Método</th>}
                   <th className="p-1 text-right">Monto</th>
                 </tr>
               </thead>
               <tbody>
                 {pagos.map((p: any, i: number) => (
                   <tr key={p.id ?? i} className="border-b border-slate-100">
-                    <td className="p-1">{p.metodo}</td>
+                    {esCliente && <td className="p-1">{p.metodo}</td>}
                     <td className="p-1 text-right font-semibold">{moneda(Number(p.monto))}</td>
                   </tr>
                 ))}
@@ -384,46 +483,17 @@ export default function ReciboPedido({ pedido, tipo, pagado }: Props) {
       </div>
 
       {esCliente ? (
-        <>
-          <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500">
-            <strong>Políticas:</strong> Presentar este recibo al recoger las prendas. No nos hacemos responsables
-            por prendas no reclamadas después de 30 días. Inconformidades reportar en 48 horas.
-          </div>
-          <div className="mt-4 flex gap-8">
-            <div className="flex-1 text-center">
-              <div className="h-8 border-b border-slate-400 mb-1"></div>
-              <p className="text-xs text-slate-500">Firma del cliente / Recibido conforme</p>
-            </div>
-            <div className="flex-1 text-center">
-              <div className="h-8 border-b border-slate-400 mb-1"></div>
-              <p className="text-xs text-slate-500">Sello / Firma LavaSuit</p>
-            </div>
-          </div>
-        </>
+        <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-500">
+          <strong>Políticas:</strong> Presentar este recibo al recoger las prendas. No nos hacemos responsables
+          por prendas no reclamadas después de 30 días. Inconformidades reportar en 48 horas.
+        </div>
       ) : (
-        <>
-          {pedido?.notas && (
-            <div className="mt-4">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Observaciones</p>
-              <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded p-2">{pedido.notas}</p>
-            </div>
-          )}
-          <div className="mt-4 p-3 bg-amber-50 border border-dashed border-amber-300 rounded-lg">
-            <p className="text-xs font-bold text-amber-800 mb-2">Control interno</p>
-            <div className="flex gap-6 text-xs text-amber-700">
-              <div>
-                <p className="text-amber-600">Sincronización</p>
-                <p className="font-semibold">{pedido?.sincronizado ? 'Sincronizado ✓' : 'Pendiente'}</p>
-              </div>
-              <div>
-                <p className="text-amber-600">ID sistema</p>
-                <p className="font-mono">{pedido?.id?.slice(0, 16) ?? '—'}…</p>
-              </div>
-            </div>
-            <div className="mt-2 border-b border-dashed border-amber-300 pt-5"></div>
-            <div className="mt-1 border-b border-dashed border-amber-300 pt-5"></div>
+        pedido?.notas && (
+          <div className="mt-4">
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Observaciones</p>
+            <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded p-2">{pedido.notas}</p>
           </div>
-        </>
+        )
       )}
       <div className="mt-4 pt-2 border-t border-slate-200 text-center text-[9px] text-slate-400 leading-tight">
         Software diseñado por <strong className="text-slate-500">SISTETECNI</strong><br/>

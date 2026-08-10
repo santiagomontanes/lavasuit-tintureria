@@ -20,15 +20,24 @@ exports.listar = asyncHandler(async (req, res) => {
     orderBy: { nombre: 'asc' }
   });
 
-  const grupos = await prisma.cliente.groupBy({
-    by:    ['asignadoAId'],
-    where: { asignadoAId: { not: null }, activo: true },
-    _count: { _all: true },
-    _min:   { ordenBase: true },
-    _max:   { ordenBase: true }
+  /* #Rutas M2M: contamos desde la tabla intermedia (un cliente puede estar en
+   * varias rutas). Sólo asignaciones activas de clientes activos. Se agrega en
+   * memoria para no depender de filtros por relación en groupBy. */
+  const filas = await prisma.clienteEmpleadoRuta.findMany({
+    where:  { activo: true, cliente: { activo: true } },
+    select: { usuarioId: true, orden: true }
   });
 
-  const porUsuario = new Map(grupos.map((g) => [g.asignadoAId, g]));
+  const porUsuario = new Map();
+  for (const f of filas) {
+    let g = porUsuario.get(f.usuarioId);
+    if (!g) { g = { total: 0, min: null, max: null }; porUsuario.set(f.usuarioId, g); }
+    g.total += 1;
+    if (f.orden != null) {
+      g.min = g.min == null ? f.orden : Math.min(g.min, f.orden);
+      g.max = g.max == null ? f.orden : Math.max(g.max, f.orden);
+    }
+  }
 
   const rutas = empleados.map((e) => {
     const g = porUsuario.get(e.id);
@@ -37,9 +46,9 @@ exports.listar = asyncHandler(async (req, res) => {
       nombre:        e.nombre,
       email:         e.email,
       rol:           e.rol,
-      totalClientes: g?._count?._all ?? 0,
-      ordenMin:      g?._min?.ordenBase ?? null,
-      ordenMax:      g?._max?.ordenBase ?? null
+      totalClientes: g?.total ?? 0,
+      ordenMin:      g?.min ?? null,
+      ordenMax:      g?.max ?? null
     };
   });
 

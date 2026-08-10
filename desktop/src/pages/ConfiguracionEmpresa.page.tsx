@@ -9,46 +9,58 @@ import { Card, CardHeader, CardTitle, CardBody } from '../components/ui/Card';
 import { Field, Input, Textarea } from '../components/ui/Input';
 import { useToastStore } from '../store/toast.store';
 import { useAuthStore } from '../store/auth.store';
+import OpcionesAvanzadas from '../components/config/OpcionesAvanzadas';
+import CopiasSeguridad from '../components/config/CopiasSeguridad';
+import BackupGoogleDrive from '../components/config/BackupGoogleDrive';
+import ExportarExcel from '../components/config/ExportarExcel';
+import RestablecerOperacion from '../components/config/RestablecerOperacion';
 
 interface ConfigEmpresa {
   nombreNegocio:  string;
   nit:            string | null;
   telefono:       string | null;
+  telefonosContacto: string | null;
   direccion:      string | null;
   ciudad:         string | null;
   logoBase64:     string | null;
   politicasTexto: string | null;
   garantiaTexto:  string | null;
   pieRecibo:      string | null;
+  claveCajaOffline: string | null;
 }
 
 type FormState = {
   nombreNegocio:  string;
   nit:            string;
   telefono:       string;
+  telefonosContacto: string;
   direccion:      string;
   ciudad:         string;
   logoBase64:     string;
   politicasTexto: string;
   garantiaTexto:  string;
   pieRecibo:      string;
+  claveCajaOffline: string;
 };
 
 const VACIO: FormState = {
-  nombreNegocio: '', nit: '', telefono: '', direccion: '', ciudad: '',
-  logoBase64: '', politicasTexto: '', garantiaTexto: '', pieRecibo: ''
+  nombreNegocio: '', nit: '', telefono: '', telefonosContacto: '', direccion: '', ciudad: '',
+  logoBase64: '', politicasTexto: '', garantiaTexto: '', pieRecibo: '',
+  claveCajaOffline: ''
 };
 
 const aFormState = (c: ConfigEmpresa): FormState => ({
   nombreNegocio:  c.nombreNegocio ?? '',
   nit:            c.nit ?? '',
   telefono:       c.telefono ?? '',
+  telefonosContacto: c.telefonosContacto ?? '',
   direccion:      c.direccion ?? '',
   ciudad:         c.ciudad ?? '',
   logoBase64:     c.logoBase64 ?? '',
   politicasTexto: c.politicasTexto ?? '',
   garantiaTexto:  c.garantiaTexto ?? '',
-  pieRecibo:      c.pieRecibo ?? ''
+  pieRecibo:      c.pieRecibo ?? '',
+  claveCajaOffline: c.claveCajaOffline ?? ''
 });
 
 /* Redimensiona la imagen a un máximo de `max` px y la devuelve como data URI.
@@ -106,12 +118,14 @@ export default function ConfiguracionEmpresaPage() {
         nombreNegocio:  form.nombreNegocio.trim(),
         nit:            form.nit.trim() || null,
         telefono:       form.telefono.trim() || null,
+        telefonosContacto: form.telefonosContacto.trim() || null,
         direccion:      form.direccion.trim() || null,
         ciudad:         form.ciudad.trim() || null,
         logoBase64:     form.logoBase64 || null,
         politicasTexto: form.politicasTexto.trim() || null,
         garantiaTexto:  form.garantiaTexto.trim() || null,
-        pieRecibo:      form.pieRecibo.trim() || null
+        pieRecibo:      form.pieRecibo.trim() || null,
+        claveCajaOffline: form.claveCajaOffline.trim() || null
       };
       const { data } = await api.put('/configuracion/empresa', body);
       return data as ConfigEmpresa;
@@ -194,11 +208,14 @@ export default function ConfiguracionEmpresaPage() {
                     disabled={!esAdmin}
                   />
                 </Field>
-                <Field label="Teléfono">
+                <Field
+                  label="Teléfono"
+                  hint="Varios números separados por / salen en el bloque CONTACTO del recibo."
+                >
                   <Input
                     value={form.telefono}
                     onChange={(e) => set('telefono', e.target.value)}
-                    placeholder="300 000 0000"
+                    placeholder="3112499611/3124201515"
                     disabled={!esAdmin}
                   />
                 </Field>
@@ -273,16 +290,34 @@ export default function ConfiguracionEmpresaPage() {
               </CardTitle>
             </CardHeader>
             <CardBody className="space-y-4">
-              <Field label="Políticas del recibo" hint="Una política por línea.">
+              {/* Bloque CONTACTO del recibo térmico: va justo después de las
+                  políticas, antes del crédito de SISTETECNI. */}
+              <Field
+                label="Teléfonos de contacto del recibo"
+                hint="Un número por línea (o separados por /). Salen bajo el título “Contacto”. Si lo dejas vacío se usa el Teléfono de arriba; si ambos están vacíos, el bloque no se imprime."
+              >
+                <Textarea
+                  value={form.telefonosContacto}
+                  onChange={(e) => set('telefonosContacto', e.target.value)}
+                  rows={3}
+                  placeholder={'3112499611\n3124201515\n3053627035'}
+                  disabled={!esAdmin}
+                />
+              </Field>
+
+              <Field
+                label="Políticas del recibo"
+                hint="Una política por línea. La viñeta la agrega el recibo automáticamente."
+              >
                 <Textarea
                   value={form.politicasTexto}
                   onChange={(e) => set('politicasTexto', e.target.value)}
                   rows={4}
-                  placeholder={'- Reclamos solo con este recibo.\n- Verifique sus prendas al recibir.'}
+                  placeholder={'Verifique sus prendas al recibir.\nNo respondemos por accesorios.'}
                   disabled={!esAdmin}
                 />
               </Field>
-              <Field label="Texto de garantía">
+              <Field label="Texto de garantía" hint="Solo aparece en el recibo PDF, no en el térmico.">
                 <Textarea
                   value={form.garantiaTexto}
                   onChange={(e) => set('garantiaTexto', e.target.value)}
@@ -291,12 +326,23 @@ export default function ConfiguracionEmpresaPage() {
                   disabled={!esAdmin}
                 />
               </Field>
-              <Field label="Pie de página del recibo">
+              <Field label="Pie de página del recibo" hint="Solo aparece en el recibo PDF, no en el térmico.">
                 <Textarea
                   value={form.pieRecibo}
                   onChange={(e) => set('pieRecibo', e.target.value)}
                   rows={2}
                   placeholder="Gracias por su preferencia."
+                  disabled={!esAdmin}
+                />
+              </Field>
+              <Field
+                label="Clave para cerrar caja sin conexión"
+                hint="Si la defines, el celular podrá cerrar caja offline solo con esta clave (el cierre se sincroniza al reconectar). Vacío = cierre offline deshabilitado."
+              >
+                <Input
+                  value={form.claveCajaOffline}
+                  onChange={(e) => set('claveCajaOffline', e.target.value)}
+                  placeholder="Ej: 4821"
                   disabled={!esAdmin}
                 />
               </Field>
@@ -337,14 +383,14 @@ export default function ConfiguracionEmpresaPage() {
                   {ubicacion && <div>{ubicacion}</div>}
                   {form.telefono.trim() && <div>Tel: {form.telefono.trim()}</div>}
                 </div>
-                <div className="border-t border-dashed border-slate-400 my-2" />
+                <div className="border-t-2 border-slate-700 my-2" />
                 <div className="text-center font-bold">RECIBO DE ORDEN</div>
                 <div className="text-center text-sm font-black">ORDEN: SAN-001</div>
                 <div className="text-center text-sm font-black">CLIENTE: 20_1</div>
-                <div className="border-t border-dashed border-slate-400 my-2" />
+                <div className="border-t-2 border-slate-700 my-2" />
                 <div className="flex justify-between"><span>1 x Lavado</span><span>$12.000</span></div>
                 <div className="flex justify-between font-bold mt-1"><span>TOTAL:</span><span>$12.000</span></div>
-                <div className="border-t border-dashed border-slate-400 my-2" />
+                <div className="border-t-2 border-slate-700 my-2" />
                 <div className="font-bold uppercase">Politicas</div>
                 <div className="whitespace-pre-wrap">
                   {form.politicasTexto.trim() ||
@@ -371,6 +417,53 @@ export default function ConfiguracionEmpresaPage() {
           </Card>
         </div>
       </div>
+
+      {esAdmin && (
+        <div className="pt-2">
+          <PageHeader
+            eyebrow="Configuración"
+            title="Opciones Avanzadas"
+            description="Ajustes de operación protegidos por contraseña. Cada cambio queda auditado."
+          />
+          <div className="mt-4">
+            <OpcionesAvanzadas />
+          </div>
+
+          <div className="mt-8">
+            <PageHeader
+              eyebrow="Herramientas"
+              title="Copias de seguridad"
+              description="Genera respaldos manuales y consulta los existentes. El backup automático al cerrar el día se activa en Opciones Avanzadas."
+            />
+            <div className="mt-4 space-y-5">
+              <CopiasSeguridad />
+              <BackupGoogleDrive />
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <PageHeader
+              eyebrow="Herramientas"
+              title="Exportar información a Excel"
+              description="Descarga la operación en un archivo .xlsx con una hoja por módulo. Es una consulta: no modifica datos."
+            />
+            <div className="mt-4">
+              <ExportarExcel />
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <PageHeader
+              eyebrow="Zona de riesgo"
+              title="Restablecer operación"
+              description="Borra toda la información operativa (pedidos, pagos, caja, gastos) conservando datos maestros. Genera un backup antes."
+            />
+            <div className="mt-4">
+              <RestablecerOperacion />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

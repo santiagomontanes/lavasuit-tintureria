@@ -15,5 +15,7 @@ router.post('/abrir',    cajaSesCtrl.abrir);
 router.get('/actual',    cajaSesCtrl.actual);
 router.post('/cerrar',   cajaSesCtrl.cerrar);
 router.get('/sesiones',  cajaSesCtrl.sesiones);
+// Detalle de una sesión con SUS gastos y pagos (filtrados por cajaSesionId).
+router.get('/sesiones/:id', cajaSesCtrl.detalleSesion);
 
 module.exports = router;

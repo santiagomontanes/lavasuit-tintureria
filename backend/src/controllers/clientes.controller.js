@@ -7,22 +7,191 @@ const {
   findOperation, createOperation, logDuplicate
 } = require('../lib/idempotency');
 const { construirSortKey, formatIdentificador, parseOrden } = require('../lib/orden');
+const { pendienteDePedido } = require('../lib/saldos');
+
+/* Deuda anterior del cliente (punto 9): facturas con saldo pendiente, no
+ * canceladas y aún NO consolidadas. Se muestra al elegir cliente en NuevoPedido
+ * (desktop y mobile) para decidir si consolidar. Sólo lectura. */
+exports.deuda = asyncHandler(async (req, res) => {
+  const cliente = await prisma.cliente.findUnique({
+    where: { id: req.params.id }, select: { id: true }
+  });
+  if (!cliente) throw new HttpError(404, 'Cliente no encontrado');
+
+  const pedidos = await prisma.pedido.findMany({
+    where: {
+      clienteId:             req.params.id,
+      eliminadoEn:           null,
+      estado:                { not: 'CANCELADO' },
+      consolidadoEnPedidoId: null
+    },
+    include: { pagos: { select: { monto: true } } },
+    orderBy: { createdAt: 'asc' }
+  });
+
+  const facturas = pedidos
+    .map((p) => {
+      const pagado = p.pagos.reduce((acc, x) => acc + Number(x.monto), 0);
+      return {
+        pedidoId:        p.id,
+        numero:          p.numero,
+        numeroLocal:     p.numeroLocal,
+        total:           Number(p.total),
+        deudaConsolidada: Number(p.deudaConsolidada),
+        pagado,
+        pendiente:       pendienteDePedido(p, pagado),
+        createdAt:       p.createdAt
+      };
+    })
+    .filter((f) => f.pendiente > 0.001);
+
+  res.json({
+    clienteId:  req.params.id,
+    totalDeuda: facturas.reduce((acc, f) => acc + f.pendiente, 0),
+    cantidad:   facturas.length,
+    facturas
+  });
+});
+
+/* Historial completo de facturas de un cliente (punto 9 desktop). Solo lectura.
+ * Devuelve KPIs del cliente + lista filtrable/paginada de SUS órdenes. */
+exports.facturas = asyncHandler(async (req, res) => {
+  const cliente = await prisma.cliente.findUnique({
+    where:  { id: req.params.id },
+    select: { id: true, nombre: true, telefono: true, identificador: true, direccion: true, email: true }
+  });
+  if (!cliente) throw new HttpError(404, 'Cliente no encontrado');
+
+  const filtro = String(req.query.estado ?? 'todas').toLowerCase();
+  const page   = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+  const limit  = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '100'), 10) || 100));
+
+  const pedidos = await prisma.pedido.findMany({
+    where:   { clienteId: req.params.id, eliminadoEn: null },
+    include: {
+      usuario: { select: { id: true, nombre: true } },
+      pagos:   { select: { monto: true } },
+      items:   { select: { cantidad: true } },
+      edicionesHistorial: {
+        orderBy: { createdAt: 'desc' }, take: 1,
+        include: { usuario: { select: { id: true, nombre: true } } }
+      },
+      consolidacionesDestino: {
+        where:   { revertidoEn: null },
+        include: { pedidoOrigen: { select: { id: true, numero: true } } }
+      },
+      _count: { select: { garantias: true } }
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  const enriquecidas = pedidos.map((p) => {
+    const abonado = p.pagos.reduce((acc, x) => acc + Number(x.monto), 0);
+    const total   = Number(p.total);
+    const deudaConsolidada = Number(p.deudaConsolidada ?? 0);
+    const ultimaEd = p.edicionesHistorial[0] ?? null;
+    return {
+      id:                p.id,
+      numero:            p.numero,
+      numeroLocal:       p.numeroLocal,
+      createdAt:         p.createdAt,
+      estado:            p.estado,
+      total,
+      deudaConsolidada,
+      totalAPagar:       total + deudaConsolidada,
+      abonado,
+      pendiente:         pendienteDePedido(p, abonado),
+      empleadoRecibe:    p.usuario ?? null,
+      ultimaModificacion: ultimaEd ? { usuario: ultimaEd.usuario, fecha: ultimaEd.createdAt } : null,
+      encargadoEntrega:  p.encargadoEntrega ?? null,
+      fechaEntrega:      p.fechaEntrega,
+      consolidadoEnPedidoId: p.consolidadoEnPedidoId ?? null,
+      facturasOrigen:    p.consolidacionesDestino.map((c) => ({
+        pedidoId: c.pedidoOrigen?.id ?? null, numero: c.pedidoOrigen?.numero ?? null,
+        monto: Number(c.montoConsolidado)
+      })),
+      garantias:         p._count.garantias,
+      prendas:           p.items.reduce((acc, it) => acc + Number(it.cantidad), 0)
+    };
+  });
+
+  const enTienda = ['RECIBIDO', 'EN_PROCESO', 'LISTO'];
+  const filtrada = enriquecidas.filter((f) => {
+    switch (filtro) {
+      case 'pendientes':    return enTienda.includes(f.estado);
+      case 'entregadas':    return f.estado === 'ENTREGADO';
+      case 'con-deuda':     return f.pendiente > 0.001;
+      case 'con-garantias': return f.garantias > 0;
+      default:              return true;
+    }
+  });
+
+  // KPIs sobre TODAS las facturas (no canceladas) del cliente.
+  const noCanceladas = enriquecidas.filter((f) => f.estado !== 'CANCELADO');
+  const kpis = {
+    totalFacturas:    enriquecidas.length,
+    totalFacturado:   noCanceladas.reduce((acc, f) => acc + f.total, 0),
+    totalAbonado:     enriquecidas.reduce((acc, f) => acc + f.abonado, 0),
+    deudaActual:      noCanceladas.reduce((acc, f) => acc + f.pendiente, 0),
+    ultimaVisita:     enriquecidas[0]?.createdAt ?? null,
+    totalPrendas:     enriquecidas.reduce((acc, f) => acc + f.prendas, 0)
+  };
+
+  const totalFiltradas = filtrada.length;
+  const pageItems = filtrada.slice((page - 1) * limit, page * limit);
+
+  res.json({
+    cliente,
+    kpis,
+    total:   totalFiltradas,
+    page,
+    limit,
+    pages:   Math.ceil(totalFiltradas / limit),
+    facturas: pageItems
+  });
+});
 
 const CLIENTE_INCLUDE = {
   creadoPor: { select: { id: true, nombre: true } },
-  asignadoA: { select: { id: true, nombre: true } }
+  asignadoA: { select: { id: true, nombre: true } },
+  // #Rutas M2M: todos los empleados a los que está asignado el cliente.
+  rutas: {
+    where:   { activo: true },
+    include: { usuario: { select: { id: true, nombre: true, rol: true } } }
+  }
 };
 
+/* Vincula (idempotente) un cliente a un empleado en la tabla intermedia sin
+ * tocar las demás asignaciones. Usa el unique(clienteId,usuarioId): si ya
+ * existe, no hace nada. */
+const vincularRuta = (tx, clienteId, usuarioId, orden = null, subOrden = 0) =>
+  tx.clienteEmpleadoRuta.upsert({
+    where:  { clienteId_usuarioId: { clienteId, usuarioId } },
+    create: { clienteId, usuarioId, orden, subOrden, activo: true },
+    update: { activo: true }   // reactiva si estaba desactivada; no duplica
+  });
+
+/* Búsqueda de clientes: SOLO por nombre o por código/identificador.
+ *
+ * El teléfono y el email quedaron FUERA a propósito. Buscar por celular hacía
+ * que al escribir un número el resultado mezclara clientes cuyo teléfono
+ * contenía esos dígitos con el cliente cuyo código era ese número, y el
+ * operario terminaba abriendo el cliente equivocado. Regla única en Mobile,
+ * Desktop y Backend: número → código; letras → nombre. */
 exports.listar = asyncHandler(async (req, res) => {
-  const { q } = req.query;
+  const termino = String(req.query.q ?? '').trim();
+
+  const where = termino
+    ? {
+        OR: [
+          { nombre:        { contains: termino } },
+          { identificador: { contains: termino } }
+        ]
+      }
+    : { activo: true };
+
   const clientes = await prisma.cliente.findMany({
-    where: q ? {
-      OR: [
-        { nombre:   { contains: q } },
-        { telefono: { contains: q } },
-        { email:    { contains: q } }
-      ]
-    } : { activo: true },
+    where,
     include: CLIENTE_INCLUDE,
     orderBy: { nombre: 'asc' }
   });
@@ -96,6 +265,9 @@ exports.crear = asyncHandler(async (req, res) => {
         include: CLIENTE_INCLUDE
       });
 
+      // #Rutas M2M: reflejar la asignación inicial también en la intermedia.
+      if (asignadoAId) await vincularRuta(tx, creado.id, asignadoAId);
+
       if (meta) {
         await createOperation(tx, meta, {
           entityType:  'CLIENTE',
@@ -139,6 +311,137 @@ exports.actualizar = asyncHandler(async (req, res) => {
     if (e?.code === 'P2002') throw new HttpError(409, 'Telefono ya registrado');
     throw e;
   }
+});
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * CAMBIO DE IDENTIFICADOR (número visible del cliente) — solo ADMIN
+ *
+ * REGLA APLICADA (el identificador SÍ participa en ordenBase/subOrden):
+ *   El identificador NO es un texto libre: es la representación de la pareja
+ *   (ordenBase, subOrden) —"280" = 280/0, "280_1" = 280/1— y de esa pareja se
+ *   deriva `sortKey`, que define el orden de recorrido de la ruta. Por eso el
+ *   cambio reescribe SIEMPRE los cuatro campos a la vez
+ *   (identificador, ordenBase, subOrden, sortKey) y también el orden del
+ *   cliente dentro de las rutas de cada empleado (ClienteEmpleadoRuta).
+ *   Guardar solo el texto dejaría al cliente ordenado por su número viejo.
+ *
+ * LO QUE NO SE TOCA:
+ *   - `Cliente.id` (uuid): es la llave real. Los pedidos apuntan ahí, así que
+ *     el histórico de órdenes queda intacto y NO se crea un cliente nuevo.
+ *   - `Pedido.numero`: consecutivo propio de las órdenes, ajeno al cliente.
+ *   - Los pedidos ya emitidos conservan el número de cliente con que se
+ *     imprimieron (viven en su propio snapshot).
+ * ───────────────────────────────────────────────────────────────────────────*/
+exports.cambiarIdentificador = asyncHandler(async (req, res) => {
+  if (req.user?.rol !== 'ADMIN') {
+    throw new HttpError(403, 'Solo un administrador puede cambiar el número del cliente');
+  }
+
+  const { id } = req.params;
+  const identificadorNuevo = String(req.body?.identificador ?? '').trim();
+  const motivo             = String(req.body?.motivo ?? '').trim();
+
+  if (!identificadorNuevo) throw new HttpError(400, 'El nuevo número/identificador es obligatorio');
+  if (motivo.length < 5)   throw new HttpError(400, 'El motivo del cambio es obligatorio (mínimo 5 caracteres)');
+  if (identificadorNuevo.length > 40) throw new HttpError(400, 'El identificador no puede superar 40 caracteres');
+
+  // Formato aceptado: "280" o "280_1" (base y sub-orden). Es el mismo que
+  // produce formatIdentificador, así que lo que se guarda siempre se puede
+  // volver a interpretar como ruta.
+  const partes = identificadorNuevo.match(/^(\d+)(?:[_.](\d+))?$/);
+  if (!partes) {
+    throw new HttpError(400, 'Formato inválido. Usa el número de la ruta: "280" o "280_1".');
+  }
+  const ordenBaseNuevo = parseInt(partes[1], 10);
+  const subOrdenNuevo  = partes[2] ? parseInt(partes[2], 10) : 0;
+  const canonico       = formatIdentificador(ordenBaseNuevo, subOrdenNuevo);
+  const sortKeyNuevo   = construirSortKey(ordenBaseNuevo, subOrdenNuevo);
+
+  const cliente = await prisma.cliente.findUnique({
+    where:  { id },
+    select: { id: true, nombre: true, identificador: true, ordenBase: true, subOrden: true }
+  });
+  if (!cliente) throw new HttpError(404, 'Cliente no encontrado');
+
+  if (cliente.identificador === canonico) {
+    throw new HttpError(400, `El cliente ya tiene el número ${canonico}`);
+  }
+
+  // Duplicados: se valida por identificador Y por la pareja (ordenBase,
+  // subOrden), que además tiene un unique en la base. Así el 409 sale con un
+  // mensaje claro en vez de un P2002 críptico.
+  const ocupado = await prisma.cliente.findFirst({
+    where: {
+      id: { not: id },
+      OR: [
+        { identificador: canonico },
+        { AND: [{ ordenBase: ordenBaseNuevo }, { subOrden: subOrdenNuevo }] }
+      ]
+    },
+    select: { id: true, nombre: true, identificador: true }
+  });
+  if (ocupado) {
+    throw new HttpError(409, `El número ${canonico} ya lo tiene ${ocupado.nombre}. Elige otro.`);
+  }
+
+  const actualizado = await prisma.$transaction(async (tx) => {
+    const c = await tx.cliente.update({
+      where: { id },
+      data:  {
+        identificador: canonico,
+        ordenBase:     ordenBaseNuevo,
+        subOrden:      subOrdenNuevo,
+        sortKey:       sortKeyNuevo
+      },
+      include: CLIENTE_INCLUDE
+    });
+
+    // El orden dentro de la ruta de CADA empleado sigue al número del cliente.
+    await tx.clienteEmpleadoRuta.updateMany({
+      where: { clienteId: id },
+      data:  { orden: ordenBaseNuevo, subOrden: subOrdenNuevo }
+    });
+
+    await tx.clienteIdentificadorHistorial.create({
+      data: {
+        clienteId:             id,
+        usuarioId:             req.user.id,
+        identificadorAnterior: cliente.identificador ?? null,
+        identificadorNuevo:    canonico,
+        ordenBaseAnterior:     cliente.ordenBase ?? null,
+        subOrdenAnterior:      cliente.subOrden ?? null,
+        ordenBaseNuevo,
+        subOrdenNuevo,
+        motivo
+      }
+    });
+
+    return c;
+  });
+
+  console.log('[clientes.cambiarIdentificador]', {
+    clienteId: id,
+    de:        cliente.identificador ?? null,
+    a:         canonico,
+    usuarioId: req.user.id,
+    motivo
+  });
+
+  // Mobile escucha 'cliente-actualizado' y refresca su copia local: el nuevo
+  // código llega sin necesidad de reinstalar ni volver a iniciar sesión.
+  ioBus.emit('cliente-actualizado', actualizado);
+  res.json(actualizado);
+});
+
+/* GET /api/clientes/:id/identificador-historial — auditoría de cambios. */
+exports.historialIdentificador = asyncHandler(async (req, res) => {
+  const historial = await prisma.clienteIdentificadorHistorial.findMany({
+    where:   { clienteId: req.params.id },
+    include: { usuario: { select: { id: true, nombre: true } } },
+    orderBy: { createdAt: 'desc' },
+    take:    100
+  });
+  res.json(historial);
 });
 
 exports.desactivar = asyncHandler(async (req, res) => {
@@ -262,15 +565,29 @@ exports.importarExcel = asyncHandler(async (req, res) => {
  * el orden exacto de recorrido (sortKey).
  */
 exports.listarAsignados = asyncHandler(async (req, res) => {
+  // #Rutas M2M: un cliente puede estar en la ruta de varios empleados. Devolvemos
+  // los del empleado actual desde la tabla intermedia, uniendo el legacy
+  // `asignadoAId` por si algo no se hubiera backfilleado todavía.
   const clientes = await prisma.cliente.findMany({
-    where:   { asignadoAId: req.user.id, activo: true },
+    where: {
+      activo: true,
+      OR: [
+        { rutas: { some: { usuarioId: req.user.id, activo: true } } },
+        { asignadoAId: req.user.id }
+      ]
+    },
     include: CLIENTE_INCLUDE,
     orderBy: [
       { sortKey: { sort: 'asc', nulls: 'last' } },
       { nombre:  'asc' }
     ]
   });
-  res.json(clientes);
+
+  /* Compat mobile offline: la app guarda una sola columna `asignadoAId` y filtra
+   * su lista local por ella. Desde la óptica de ESTE empleado el cliente le
+   * pertenece, así que sellamos `asignadoAId` con su propio id. El dueño real
+   * multi-empleado sigue en `rutas`. Mobile no reenvía este campo, es seguro. */
+  res.json(clientes.map((c) => ({ ...c, asignadoAId: req.user.id })));
 });
 
 /*
@@ -293,24 +610,152 @@ exports.asignar = asyncHandler(async (req, res) => {
     throw new HttpError(400, 'Debe enviar clienteIds o un rango desde/hasta');
   }
 
-  await prisma.cliente.updateMany({
-    where,
-    data: { asignadoAId: usuarioId }
+  // #Rutas M2M: ADITIVO. Agregamos la asignación a este empleado en la tabla
+  // intermedia SIN borrar las de otros empleados. `asignadoAId` (legacy) solo se
+  // setea si el cliente aún no tenía asignación única, para no "reemplazar".
+  const clientesObjetivo = await prisma.cliente.findMany({
+    where, select: { id: true, ordenBase: true, subOrden: true, asignadoAId: true }
   });
 
-  /* Conteo real y sin ambigüedad: clientes que coinciden con el criterio y
-   * que efectivamente quedaron asignados a este empleado. `asignados` cuenta
-   * solo los activos (los que se ven en la lista de la ruta); `procesados`
-   * incluye también inactivos. Así el mensaje del frontend coincide con la
-   * lista visible y no se calcula a partir de un rango aproximado. */
+  await prisma.$transaction(async (tx) => {
+    // Vínculos M2M (idempotentes por unique).
+    if (clientesObjetivo.length > 0) {
+      await tx.clienteEmpleadoRuta.createMany({
+        data: clientesObjetivo.map((c) => ({
+          clienteId: c.id,
+          usuarioId,
+          orden:     c.ordenBase ?? null,
+          subOrden:  c.subOrden ?? 0,
+          activo:    true
+        })),
+        skipDuplicates: true
+      });
+    }
+    // Reactivar los que estuvieran desactivados para este empleado.
+    await tx.clienteEmpleadoRuta.updateMany({
+      where: { usuarioId, clienteId: { in: clientesObjetivo.map((c) => c.id) }, activo: false },
+      data:  { activo: true }
+    });
+    // Legacy: solo rellenar si estaba vacío (no reemplaza un dueño previo).
+    const sinAsignar = clientesObjetivo.filter((c) => !c.asignadoAId).map((c) => c.id);
+    if (sinAsignar.length > 0) {
+      await tx.cliente.updateMany({ where: { id: { in: sinAsignar } }, data: { asignadoAId: usuarioId } });
+    }
+  });
+
+  /* Conteo real: clientes que quedaron vinculados a este empleado por el criterio.
+   * `asignados` = activos (visibles en la ruta); `procesados` = todos. */
   const [asignados, procesados] = await Promise.all([
-    prisma.cliente.count({ where: { ...where, asignadoAId: usuarioId, activo: true } }),
-    prisma.cliente.count({ where: { ...where, asignadoAId: usuarioId } })
+    prisma.cliente.count({ where: { ...where, activo: true, rutas: { some: { usuarioId, activo: true } } } }),
+    prisma.cliente.count({ where: { ...where, rutas: { some: { usuarioId } } } })
   ]);
 
   console.log(`[clientes.asignar] ${asignados} clientes activos -> ${empleado.nombre} (${usuarioId}) [procesados=${procesados}]`);
   ioBus.emit('clientes-asignados', { usuarioId, total: asignados });
   res.json({ asignados, procesados, usuarioId, empleado: empleado.nombre });
+});
+
+/* ─── #Rutas M2M: gestión de asignaciones POR CLIENTE (ADMIN) ─────────────── */
+
+const cargarClienteConRutas = (id) => prisma.cliente.findUnique({
+  where:   { id },
+  include: CLIENTE_INCLUDE
+});
+
+/* GET /api/clientes/:id/asignaciones → empleados asignados a un cliente. */
+exports.listarAsignaciones = asyncHandler(async (req, res) => {
+  const cliente = await prisma.cliente.findUnique({ where: { id: req.params.id }, select: { id: true } });
+  if (!cliente) throw new HttpError(404, 'Cliente no encontrado');
+  const rutas = await prisma.clienteEmpleadoRuta.findMany({
+    where:   { clienteId: req.params.id, activo: true },
+    include: { usuario: { select: { id: true, nombre: true, rol: true, activo: true } } },
+    orderBy: { createdAt: 'asc' }
+  });
+  res.json(rutas.map((r) => ({
+    id: r.id, usuarioId: r.usuarioId, usuario: r.usuario,
+    orden: r.orden, subOrden: r.subOrden
+  })));
+});
+
+/* POST /api/clientes/:id/asignaciones { usuarioIds:[...] } → AGREGA (no borra). */
+exports.agregarAsignaciones = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const usuarioIds = Array.isArray(req.body?.usuarioIds) ? req.body.usuarioIds.filter(Boolean) : [];
+  if (usuarioIds.length === 0) throw new HttpError(400, 'Envía al menos un usuarioId');
+
+  const cliente = await prisma.cliente.findUnique({
+    where: { id }, select: { id: true, ordenBase: true, subOrden: true, asignadoAId: true }
+  });
+  if (!cliente) throw new HttpError(404, 'Cliente no encontrado');
+
+  const empleados = await prisma.usuario.findMany({ where: { id: { in: usuarioIds } }, select: { id: true } });
+  const validos = new Set(empleados.map((e) => e.id));
+  const aVincular = usuarioIds.filter((u) => validos.has(u));
+  if (aVincular.length === 0) throw new HttpError(400, 'Ningún empleado válido');
+
+  await prisma.$transaction(async (tx) => {
+    for (const usuarioId of aVincular) {
+      await vincularRuta(tx, id, usuarioId, cliente.ordenBase ?? null, cliente.subOrden ?? 0);
+    }
+    if (!cliente.asignadoAId) {
+      await tx.cliente.update({ where: { id }, data: { asignadoAId: aVincular[0] } });
+    }
+  });
+
+  ioBus.emit('clientes-asignados', { clienteId: id });
+  res.status(201).json(await cargarClienteConRutas(id));
+});
+
+/* DELETE /api/clientes/:id/asignaciones/:usuarioId → quita UNA sin tocar otras. */
+exports.quitarAsignacion = asyncHandler(async (req, res) => {
+  const { id, usuarioId } = req.params;
+  const cliente = await prisma.cliente.findUnique({ where: { id }, select: { id: true, asignadoAId: true } });
+  if (!cliente) throw new HttpError(404, 'Cliente no encontrado');
+
+  await prisma.$transaction(async (tx) => {
+    await tx.clienteEmpleadoRuta.deleteMany({ where: { clienteId: id, usuarioId } });
+    // Si el legacy apuntaba a este empleado, reapuntarlo a otra asignación viva
+    // (o null) para mantener coherencia con mobile/offline.
+    if (cliente.asignadoAId === usuarioId) {
+      const otra = await tx.clienteEmpleadoRuta.findFirst({
+        where: { clienteId: id, activo: true }, orderBy: { createdAt: 'asc' }, select: { usuarioId: true }
+      });
+      await tx.cliente.update({ where: { id }, data: { asignadoAId: otra?.usuarioId ?? null } });
+    }
+  });
+
+  ioBus.emit('clientes-asignados', { clienteId: id });
+  res.json(await cargarClienteConRutas(id));
+});
+
+/* PUT /api/clientes/:id/asignaciones { usuarioIds:[...] } → REEMPLAZA la lista
+ * completa de forma explícita (agrega los nuevos, quita los que ya no están). */
+exports.reemplazarAsignaciones = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const usuarioIds = Array.isArray(req.body?.usuarioIds) ? [...new Set(req.body.usuarioIds.filter(Boolean))] : [];
+
+  const cliente = await prisma.cliente.findUnique({
+    where: { id }, select: { id: true, ordenBase: true, subOrden: true }
+  });
+  if (!cliente) throw new HttpError(404, 'Cliente no encontrado');
+
+  const empleados = await prisma.usuario.findMany({ where: { id: { in: usuarioIds } }, select: { id: true } });
+  const validos = empleados.map((e) => e.id);
+
+  await prisma.$transaction(async (tx) => {
+    // Quitar los que ya no están en la lista.
+    await tx.clienteEmpleadoRuta.deleteMany({
+      where: { clienteId: id, usuarioId: { notIn: validos.length ? validos : ['__none__'] } }
+    });
+    // Agregar los nuevos (idempotente).
+    for (const usuarioId of validos) {
+      await vincularRuta(tx, id, usuarioId, cliente.ordenBase ?? null, cliente.subOrden ?? 0);
+    }
+    await tx.cliente.update({ where: { id }, data: { asignadoAId: validos[0] ?? null } });
+  });
+
+  ioBus.emit('clientes-asignados', { clienteId: id });
+  res.json(await cargarClienteConRutas(id));
 });
 
 /*
@@ -363,6 +808,9 @@ exports.crearEnRuta = asyncHandler(async (req, res) => {
           },
           include: CLIENTE_INCLUDE
         });
+
+        // #Rutas M2M: reflejar la asignación al creador en la intermedia.
+        await vincularRuta(tx, creado.id, req.user.id, ordenBase, subOrden);
 
         if (meta) {
           await createOperation(tx, meta, {

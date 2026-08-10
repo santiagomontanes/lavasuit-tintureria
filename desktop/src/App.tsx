@@ -14,6 +14,8 @@ import ServiciosPage        from './pages/Servicios.page';
 import MarcasPage            from './pages/Marcas.page';
 import ColoresPage           from './pages/Colores.page';
 import CajaPage             from './pages/Caja.page';
+import GastosPage           from './pages/Gastos.page';
+import ReportesPage         from './pages/Reportes.page';
 import EmpleadosPage        from './pages/Empleados.page';
 import ConfiguracionEmpresaPage from './pages/ConfiguracionEmpresa.page';
 import PedidoDetallePage    from './pages/PedidoDetalle.page';
@@ -35,6 +37,8 @@ function RenderView() {
     case 'marcas':          return <MarcasPage />;
     case 'colores':         return <ColoresPage />;
     case 'caja':            return <CajaPage />;
+    case 'gastos':          return <GastosPage />;
+    case 'reportes':        return <ReportesPage />;
     case 'empleados':       return <EmpleadosPage />;
     case 'configuracion':   return <ConfiguracionEmpresaPage />;
     case 'pedido-detalle':  return <PedidoDetallePage id={view.id} />;

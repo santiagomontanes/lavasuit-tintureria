@@ -3,6 +3,8 @@ const asyncHandler = require('../utils/asyncHandler');
 const { HttpError } = require('../middlewares/error.middleware');
 const { sesionAbiertaDeUsuario } = require('../lib/sesionesTrabajo');
 const { calcularTotalesPago } = require('../lib/metodosPago');
+const { sumaPagos, pendienteDePedido } = require('../lib/saldos');
+const { generarBackup } = require('../lib/backup');
 
 // new Date("YYYY-MM-DD") parsea como UTC midnight, lo que en zona UTC-5 da la noche
 // anterior en local, corriendo el rango un día atrás. Se usa el constructor con partes
@@ -70,7 +72,7 @@ exports.resumen = asyncHandler(async (req, res) => {
    * Antes el filtro de Prisma combinaba `pedido` raíz con OR + `pedido`, lo
    * que ocultaba pagos válidos cuando la caja tenía sesionTrabajoId distinta
    * a la del pago, o cuando el pago se hizo antes de abrir la caja. */
-  const [pagosEnRango, pedidosUsuarioRango] = await Promise.all([
+  const [pagosEnRango, pedidosUsuarioRango, gastosEnRango] = await Promise.all([
     prisma.pago.findMany({
       where: { createdAt: { gte: desde, lt: hasta } },
       include: {
@@ -91,6 +93,15 @@ exports.resumen = asyncHandler(async (req, res) => {
         cliente: { select: { id: true, nombre: true, identificador: true } },
         pagos:   true
       }
+    }),
+    prisma.gasto.findMany({
+      where: {
+        deletedAt: null,
+        fecha: { gte: desde, lt: hasta },
+        creadoPorId: usuarioFiltro
+      },
+      include: { creadoPor: { select: { id: true, nombre: true, rol: true } } },
+      orderBy: { fecha: 'desc' }
     })
   ]);
 
@@ -165,11 +176,12 @@ exports.resumen = asyncHandler(async (req, res) => {
   } = calcularTotalesPago(pagos);
   const totalOtros = totalOtro;
 
-  /* Pendiente real por pedido = total - SUMA DE TODOS sus pagos
-   * (p.pagos incluye todos, no solo los del rango). */
+  /* Pendiente real por pedido vía helper único: total + deudaConsolidada - pagos,
+   * y 0 si la orden fue consolidada en otra (su deuda se cobra en el destino).
+   * p.pagos incluye TODOS los pagos, no sólo los del rango. */
   const pedidosConSaldo = pedidos.map((p) => {
-    const pagadoPedido    = p.pagos.reduce((acc, pg) => acc + Number(pg.monto), 0);
-    const pendientePedido = Math.max(0, Number(p.total) - pagadoPedido);
+    const pagadoPedido    = sumaPagos(p);
+    const pendientePedido = pendienteDePedido(p, pagadoPedido);
     return { ...p, pagadoPedido, pendientePedido };
   });
 
@@ -178,6 +190,7 @@ exports.resumen = asyncHandler(async (req, res) => {
   const pedidosPagados = pedidosConSaldo.filter((p) => p.pendientePedido < 0.001).length;
   const pedidosPendientes = pedidosConSaldo.filter((p) => p.pendientePedido > 0).length;
   const valorOrdenado  = pedidos.reduce((acc, p) => acc + Number(p.total), 0);
+  const totalGastos    = gastosEnRango.reduce((acc, g) => acc + Number(g.valor), 0);
 
   console.log('[caja.resumen] totales:', {
     totalRecibido, totalEfectivo, totalNequi, totalDaviplata, totalTransferencia,
@@ -201,6 +214,18 @@ exports.resumen = asyncHandler(async (req, res) => {
     valorOrdenado,
     pedidosPagados,
     pedidosPendientes,
+    totalGastos,
+    gastos: gastosEnRango.map((g) => ({
+      id: g.id,
+      fecha: g.fecha,
+      concepto: g.concepto,
+      categoria: g.categoria,
+      valor: Number(g.valor),
+      metodoPago: g.metodoPago,
+      descripcion: g.descripcion,
+      creadoPorId: g.creadoPorId,
+      creadoPor: g.creadoPor
+    })),
     pagos: pagos.map((p) => ({
       id: p.id, pedidoId: p.pedidoId, monto: Number(p.monto),
       metodo: p.metodo, createdAt: p.createdAt,
@@ -244,10 +269,7 @@ exports.cierre = asyncHandler(async (req, res) => {
   } = calcularTotalesPago(pagos);
   const totalOtros = totalOtro;
 
-  const totalPendiente = pedidos.reduce((acc, p) => {
-    const pagado = p.pagos.reduce((s, pg) => s + Number(pg.monto), 0);
-    return acc + Math.max(0, Number(p.total) - pagado);
-  }, 0);
+  const totalPendiente = pedidos.reduce((acc, p) => acc + pendienteDePedido(p), 0);
 
   const costoNum = costoManual != null ? Number(costoManual) : null;
   const utilidad = costoNum != null ? totalRecibido - costoNum : null;
@@ -273,7 +295,32 @@ exports.cierre = asyncHandler(async (req, res) => {
     include: { usuario: { select: { id: true, nombre: true } } }
   });
 
-  res.status(201).json(cierre);
+  /* Backup automático al cerrar el día (configuración avanzada, default ON).
+   * NO bloquea el cierre: si falla, solo se devuelve una advertencia. */
+  let backupAdvertencia = null;
+  let backup = null;
+  try {
+    // Lectura por SQL crudo (la columna existe en la BD): así el cierre nunca se
+    // rompe aunque el cliente Prisma no se haya regenerado tras agregar el flag.
+    let flagOn = true;
+    try {
+      const rows = await prisma.$queryRawUnsafe(
+        "SELECT CAST(backupAutomaticoAlCerrarDia AS UNSIGNED) AS f FROM ConfiguracionEmpresa WHERE id = 'singleton' LIMIT 1"
+      );
+      if (rows && rows[0] && rows[0].f != null) flagOn = Number(rows[0].f) !== 0;
+    } catch { flagOn = true; }
+    if (flagOn) {
+      backup = await generarBackup({
+        usuarioId: req.user.id,
+        motivo:    'cierre-dia-automatico'
+      });
+    }
+  } catch (e) {
+    backupAdvertencia = `El cierre se guardó, pero no se pudo generar el backup automático: ${e.message}`;
+    console.warn('[caja.cierre] backup automático falló:', e.message);
+  }
+
+  res.status(201).json({ ...cierre, backup, backupAdvertencia });
 });
 
 exports.historial = asyncHandler(async (req, res) => {

@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { METODOS_PAGO_ACTIVOS, normalizarMetodoPago } = require('../lib/metodosPago');
+const { METODOS_PAGO, normalizarMetodoPago } = require('../lib/metodosPago');
 
 const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
@@ -15,9 +15,13 @@ const syncMeta = {
 const crear = z.object({
   pedidoId: z.string().regex(uuidRegex, 'pedidoId invalido'),
   monto:    z.coerce.number().positive('Monto debe ser > 0'),
+  /* Se acepta cualquier método del enum de Prisma y se guarda TAL CUAL.
+   * Antes el preprocess convertía TARJETA/YAPE/PLIN en TRANSFERENCIA: el pago
+   * quedaba etiquetado con un método que nadie usó. Hoy solo se normaliza
+   * mayúsculas/espacios; el método cobrado es el que se persiste. */
   metodo: z.preprocess(
     (v) => normalizarMetodoPago(typeof v === 'string' ? v.trim().toUpperCase() : v),
-    z.enum(METODOS_PAGO_ACTIVOS, { message: 'Metodo de pago invalido' })
+    z.enum(METODOS_PAGO, { message: 'Metodo de pago invalido' })
   ),
   observacion: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),

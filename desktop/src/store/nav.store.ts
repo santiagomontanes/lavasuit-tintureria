@@ -9,6 +9,8 @@ export type View =
   | { kind: 'marcas' }
   | { kind: 'colores' }
   | { kind: 'caja' }
+  | { kind: 'gastos' }
+  | { kind: 'reportes' }
   | { kind: 'empleados' }
   | { kind: 'configuracion' }
   | { kind: 'pedido-detalle'; id: string };
@@ -55,6 +57,8 @@ export const tituloVista: Record<View['kind'], string> = {
   'marcas':          'Marcas',
   'colores':         'Colores',
   'caja':            'Caja',
+  'gastos':          'Gastos',
+  'reportes':        'Reportes',
   'empleados':       'Usuarios',
   'configuracion':   'Configuración de empresa',
   'pedido-detalle':  'Detalle del pedido'

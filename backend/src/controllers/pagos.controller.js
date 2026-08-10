@@ -3,12 +3,36 @@ const asyncHandler = require('../utils/asyncHandler');
 const { HttpError } = require('../middlewares/error.middleware');
 const ioBus = require('../lib/io');
 const { sesionAbiertaDeUsuario, recalcularSesionTrabajo } = require('../lib/sesionesTrabajo');
+const { sumaPagos, totalAPagar } = require('../lib/saldos');
 const {
   pickSyncMeta, stripSyncMeta, payloadHash,
   findOperation, createOperation, logDuplicate
 } = require('../lib/idempotency');
 
 const EPS = 0.0001;
+
+/* Resuelve la sesión de caja a la que pertenece el pago (mismo criterio que
+ * gastos.resolverCajaSesionId):
+ *  - Si el cliente envía cajaSesionId (mobile, que conoce su sesión incluso al
+ *    sincronizar un pago creado offline), se respeta SOLO si esa sesión existe.
+ *  - Si no, se infiere la caja ABIERTA del usuario. Así el arqueo cuenta el pago
+ *    únicamente en su sesión (filtro ESTRICTO en el resumen). Si no hay caja
+ *    abierta, queda null → no entra a ningún arqueo. */
+const resolverCajaSesionIdPago = async (client, cajaSesionIdEnviada, usuarioId) => {
+  if (cajaSesionIdEnviada) {
+    const existe = await client.cajaSesion.findUnique({
+      where: { id: String(cajaSesionIdEnviada) }, select: { id: true }
+    });
+    if (existe) return existe.id;
+  }
+  if (!usuarioId) return null;
+  const abierta = await client.cajaSesion.findFirst({
+    where:   { usuarioId, estado: 'ABIERTA' },
+    orderBy: { fechaApertura: 'desc' },
+    select:  { id: true }
+  });
+  return abierta?.id ?? null;
+};
 
 exports.crear = asyncHandler(async (req, res) => {
   const meta = pickSyncMeta(req.body);
@@ -29,22 +53,48 @@ exports.crear = asyncHandler(async (req, res) => {
   }
 
   const clean = stripSyncMeta(req.body);
-  const { pedidoId, monto, metodo } = clean;
+  const { pedidoId, monto, metodo, cajaSesionId: cajaSesionIdEnviada } = clean;
   const montoNum = Number(monto);
 
   let resultado;
   try {
     resultado = await prisma.$transaction(async (tx) => {
-      const pedido = await tx.pedido.findFirst({
+      let pedido = await tx.pedido.findFirst({
         where:   { id: pedidoId, eliminadoEn: null },
         include: { pagos: true }
       });
       if (!pedido) throw new HttpError(404, 'Pedido no encontrado');
-      if (pedido.estado === 'CANCELADO') throw new HttpError(400, 'No se puede pagar un pedido cancelado');
 
-      const total  = Number(pedido.total);
-      const pagado = pedido.pagos.reduce((acc, p) => acc + Number(p.monto), 0);
-      const saldo  = total - pagado;
+      /* Si la factura fue CONSOLIDADA en otra orden, su saldo se migró al
+       * destino: el pago debe ir AHÍ, no a la factura origen (evita el 400
+       * "factura consolidada" que bloqueaba abonos válidos del flujo
+       * "nueva orden + llamar deuda + abonar"). Seguimos la cadena hasta el
+       * destino vivo. La idempotencia (clientMutationId) evita duplicar. */
+      let saltos = 0;
+      while (pedido.consolidadoEnPedidoId && saltos++ < 10) {
+        const destino = await tx.pedido.findFirst({
+          where:   { id: pedido.consolidadoEnPedidoId, eliminadoEn: null },
+          include: { pagos: true }
+        });
+        if (!destino) break;            // destino borrado → caer al guard de abajo
+        pedido = destino;
+      }
+      if (pedido.consolidadoEnPedidoId) {
+        // No se pudo resolver un destino vivo (cadena rota): mensaje claro.
+        throw new HttpError(400, 'Esta factura fue consolidada en otra orden. Registra el pago en la factura destino.');
+      }
+      if (pedido.estado === 'CANCELADO') throw new HttpError(400, 'No se puede pagar un pedido cancelado');
+      // A partir de aquí, `pedido` es SIEMPRE el destino vivo y el pago se
+      // registra contra su id (puede diferir del pedidoId solicitado).
+      const pedidoIdDestino = pedido.id;
+
+      // "Total a pagar" = prendas + deuda anterior consolidada. El saldo se
+      // mide contra ESE total, no sólo contra las prendas: así se permite abonar
+      // más que el valor de las prendas cuando hay deuda anterior absorbida.
+      const totalPrendas = Number(pedido.total);
+      const totalPagar   = totalAPagar(pedido);
+      const pagado       = sumaPagos(pedido);
+      const saldo        = totalPagar - pagado;
 
       if (saldo <= EPS) throw new HttpError(400, 'El pedido ya esta pagado completamente');
       if (montoNum > saldo + EPS) {
@@ -58,11 +108,15 @@ exports.crear = asyncHandler(async (req, res) => {
             usuarioId: req.user.id
           });
       }
+      // Sesión de caja (arqueo ESTRICTO por sesión): respeta la enviada por
+      // mobile si existe; si no, infiere la caja abierta del usuario.
+      const cajaSesionId = await resolverCajaSesionIdPago(tx, cajaSesionIdEnviada, req.user.id);
       const pago = await tx.pago.create({
         data: {
-          pedidoId,
+          pedidoId: pedidoIdDestino,              // ← destino vivo (sigue consolidación)
           usuarioId: req.user.id,                 // ← SIEMPRE el empleado autenticado
           sesionTrabajoId: sesion?.id ?? null,    // ← puede quedar null si no hay sesion abierta
+          cajaSesionId,                           // ← vínculo con la caja para el arqueo
           monto: montoNum,
           metodo
         },
@@ -92,32 +146,44 @@ exports.crear = asyncHandler(async (req, res) => {
       }
 
       const nuevoPagado = pagado + montoNum;
-      const completado  = Math.abs(total - nuevoPagado) < EPS;
+      // Auto-entrega al cubrir el valor de las PRENDAS (decisión de negocio):
+      // la ropa se entrega aunque quede deuda anterior pendiente; la deuda se
+      // sigue cobrando aparte sobre el saldo total.
+      const completado  = nuevoPagado >= totalPrendas - EPS;
 
       /* AUTO-ENTREGA: si este pago salda el pedido y todavía no está entregado,
-       * lo marcamos como ENTREGADO automáticamente. Se registra en el historial
-       * de estados con el mismo usuario que cobró. */
+       * lo marcamos como ENTREGADO automáticamente.
+       *
+       * El registro en PedidoEstadoHistorial SE MANTIENE (es evidencia: explica
+       * por qué la orden cambió de estado y quién cobró), pero se marca
+       * `origen: 'AUTO_PAGO'`. Ese marcador es el que permite que la actividad
+       * del empleado NO liste un "Cambió estado: RECIBIDO → ENTREGADO" como si
+       * fuera un movimiento hecho a mano: el empleado registró UN abono, no dos
+       * acciones. Ver empleados.routes → /:id/actividad. */
       let entregadoAuto = false;
       if (completado && pedido.estado !== 'ENTREGADO' && pedido.estado !== 'CANCELADO') {
         await tx.pedido.update({
-          where: { id: pedidoId },
+          where: { id: pedidoIdDestino },
           data:  { estado: 'ENTREGADO' }
         });
         await tx.pedidoEstadoHistorial.create({
           data: {
-            pedidoId,
-            usuarioId:     req.user.id,
+            pedidoId:       pedidoIdDestino,
+            usuarioId:      req.user.id,
             estadoAnterior: pedido.estado,
-            estadoNuevo:   'ENTREGADO'
+            estadoNuevo:    'ENTREGADO',
+            origen:         'AUTO_PAGO',
+            accion:         'AUTO_ENTREGA_PAGO',
+            observacion:    'Entrega automática: el abono cubrió el valor de las prendas.'
           }
         });
         entregadoAuto = true;
         console.log('[pagos.crear] auto-entrega aplicada', {
-          pedidoId, usuarioId: req.user.id, estadoAnterior: pedido.estado
+          pedidoId: pedidoIdDestino, usuarioId: req.user.id, estadoAnterior: pedido.estado
         });
       }
 
-      return { pago, completado, entregadoAuto };
+      return { pago, completado, entregadoAuto, pedidoId: pedidoIdDestino };
     });
   } catch (e) {
     if (e?.code === 'P2002' && meta) {
@@ -131,15 +197,18 @@ exports.crear = asyncHandler(async (req, res) => {
     throw e;
   }
 
-  ioBus.emit('nuevo-pago', { pedidoId, pago: resultado.pago });
+  // Usamos el pedido DESTINO real (puede diferir del solicitado si hubo
+  // consolidación) para que clientes actualicen la factura correcta.
+  const pedidoIdFinal = resultado.pedidoId ?? pedidoId;
+  ioBus.emit('nuevo-pago', { pedidoId: pedidoIdFinal, pago: resultado.pago });
   if (resultado.entregadoAuto) {
     // Emitimos también el cambio de estado para que desktop/mobile se actualicen.
     const pedidoActualizado = await prisma.pedido.findUnique({
-      where:   { id: pedidoId },
+      where:   { id: pedidoIdFinal },
       include: { cliente: true }
     });
     ioBus.emit('estado-cambiado', {
-      id:     pedidoId,
+      id:     pedidoIdFinal,
       estado: 'ENTREGADO',
       pedido: pedidoActualizado,
       motivo: 'pago-cubre-saldo'

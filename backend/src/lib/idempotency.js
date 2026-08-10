@@ -72,8 +72,17 @@ const createOperation = (client, meta, data) => {
     deviceId: meta.deviceId
   });
 
-  return client.syncOperation.create({
-    data: {
+  // upsert (no create): si la operación ya existe por (clientMutationId,deviceId)
+  // NO lanza P2002. Evita 500 al reintentar una mutación cuya entidad fue
+  // borrada o cuyo registro de operación quedó huérfano.
+  return client.syncOperation.upsert({
+    where: {
+      clientMutationId_deviceId: {
+        clientMutationId: meta.clientMutationId,
+        deviceId: meta.deviceId
+      }
+    },
+    create: {
       entityType: data.entityType,
       entityId: data.entityId,
       action: data.action,
@@ -82,6 +91,10 @@ const createOperation = (client, meta, data) => {
       payloadHash: data.payloadHash ?? null,
       status: data.status ?? 'COMPLETED',
       createdOfflineAt: meta.createdOfflineAt
+    },
+    update: {
+      entityId: data.entityId,
+      status: data.status ?? 'COMPLETED'
     }
   });
 };

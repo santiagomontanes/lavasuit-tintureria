@@ -43,6 +43,9 @@ server.listen(PORT, HOST, () => {
   } else {
     console.log('[discovery] mDNS desactivado por DISCOVERY_DISABLED=1');
   }
+
+  // #Rutas M2M: migrar asignaciones únicas legacy a la tabla intermedia (idempotente).
+  require('./src/lib/rutasBackfill').backfillRutasDesdeAsignado().catch(() => {});
 });
 
 const prisma = require('./src/lib/prisma');

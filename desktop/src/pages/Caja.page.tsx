@@ -15,10 +15,13 @@ import LoadingState from '../components/ui/LoadingState';
 import CierreCajaModal   from '../components/forms/CierreCaja.modal';
 import AbrirCajaModal    from '../components/forms/AbrirCaja.modal';
 import CerrarCajaModal   from '../components/forms/CerrarCaja.modal';
+import DetalleCierreModal from '../components/caja/DetalleCierre.modal';
+import FacturasPendientes from '../components/caja/FacturasPendientes';
 import { useAuthStore } from '../store/auth.store';
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../lib/currency';
+import { resultadoCaja } from '../lib/cajaResultado';
+const moneda = formatCurrencyCOP;
 
 const METODO_LABEL: Record<string, string> = {
   EFECTIVO: 'Efectivo', TARJETA: 'Tarjeta', TRANSFERENCIA: 'Transferencia',
@@ -26,6 +29,8 @@ const METODO_LABEL: Record<string, string> = {
 };
 
 export default function CajaPage() {
+  // Sesión cuyo detalle (con sus gastos) se está mirando.
+  const [detalleSesionId, setDetalleSesionId] = useState<string | null>(null);
   const usuario = useAuthStore((s) => s.usuario);
   const qc = useQueryClient();
 
@@ -74,6 +79,14 @@ export default function CajaPage() {
 
   const cajaActiva  = cajaActualData?.cajaSesion ?? null;
   const resumenLive = cajaActualData?.resumen    ?? {};
+
+  // Caja disponible (igual que mobile) = base inicial + ingresos sesión − gastos
+  // sesión. Todo viene acotado a la sesión abierta por el backend (/caja/actual).
+  const baseInicial    = Number(cajaActiva?.montoBase ?? 0);
+  const ingresosSesion = Number(resumenLive.totalRecibido ?? 0);
+  const gastosSesion   = Number(resumenLive.totalGastos ?? 0);
+  const cajaDisponible = baseInicial + ingresosSesion - gastosSesion;
+  const gastosLive: any[] = resumenLive.gastos ?? [];
 
   const stats = [
     { label: 'Total recibido',       value: moneda(d.totalRecibido  ?? 0), icon: Wallet,       tone: 'success' as const },
@@ -144,15 +157,25 @@ export default function CajaPage() {
               <div className="flex flex-wrap gap-5 text-center">
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Base inicial</p>
-                  <p className="text-lg font-bold num text-slate-800">{moneda(Number(cajaActiva.montoBase ?? 0))}</p>
+                  <p className="text-lg font-bold num text-slate-800">{moneda(baseInicial)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wide">Ingresos (sesión)</p>
+                  <p className="text-lg font-bold num text-success-700">{moneda(ingresosSesion)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wide">Gastos (sesión)</p>
+                  <p className="text-lg font-bold num text-warning-700">{moneda(gastosSesion)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 uppercase tracking-wide">Caja disponible</p>
+                  <p className={`text-lg font-bold num ${cajaDisponible < 0 ? 'text-danger-700' : 'text-success-700'}`}>
+                    {moneda(cajaDisponible)}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Efectivo esperado</p>
                   <p className="text-lg font-bold num text-info-700">{moneda(Number(resumenLive.efectivoEsperado ?? 0))}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-slate-500 uppercase tracking-wide">Total recibido</p>
-                  <p className="text-lg font-bold num text-success-700">{moneda(Number(resumenLive.totalRecibido ?? 0))}</p>
                 </div>
                 <div>
                   <p className="text-xs text-slate-500 uppercase tracking-wide">Pendiente</p>
@@ -318,8 +341,54 @@ export default function CajaPage() {
               </TableContainer>
             )}
           </Card>
+
+          {/* Gastos de la sesión de caja abierta (mismo cálculo que mobile) */}
+          {cajaActiva && (
+            <Card className="overflow-hidden">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ArrowDownCircle size={16} /> Gastos de la sesión
+                </CardTitle>
+                <Badge tone="warning" outline>{moneda(gastosSesion)}</Badge>
+              </CardHeader>
+              {gastosLive.length === 0 ? (
+                <CardBody>
+                  <p className="text-center text-slate-400 py-4">No hay gastos en esta sesión de caja.</p>
+                </CardBody>
+              ) : (
+                <TableContainer className="border-0 shadow-none rounded-none">
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Concepto</TH><TH>Categoría</TH><TH>Empleado</TH>
+                        <TH>Método</TH><TH align="right">Valor</TH><TH>Fecha</TH>
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {gastosLive.map((g: any) => (
+                        <TR key={g.id}>
+                          <TD className="font-medium text-slate-900">{g.concepto ?? '---'}</TD>
+                          <TD className="text-slate-600">{g.categoria ?? '---'}</TD>
+                          <TD className="text-slate-600">{g.creadoPor?.nombre ?? '---'}</TD>
+                          <TD><Badge tone="neutral" outline>{METODO_LABEL[g.metodoPago] ?? g.metodoPago ?? 'Efectivo'}</Badge></TD>
+                          <TD align="right" className="num font-bold text-warning-700">{moneda(Number(g.valor ?? 0))}</TD>
+                          <TD className="text-slate-500">
+                            <p>{dayjs(g.fecha).format('DD/MM/YYYY')}</p>
+                            <p className="text-xs">{dayjs(g.fecha).format('HH:mm')}</p>
+                          </TD>
+                        </TR>
+                      ))}
+                    </TBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </Card>
+          )}
         </>
       )}
+
+      {/* ── #4 Facturas pendientes por cobrar (saldo real > 0) ───────────── */}
+      <FacturasPendientes />
 
       {/* ── Historial de sesiones de caja ────────────────────────────────── */}
       {sesiones.length > 0 && (
@@ -335,15 +404,16 @@ export default function CajaPage() {
               <THead>
                 <TR>
                   <TH>Empleado</TH><TH>Apertura</TH><TH>Cierre</TH>
-                  <TH>Base</TH><TH>Recibido</TH><TH>Ef. esperado</TH>
-                  <TH>Contado</TH><TH>Diferencia</TH><TH>Estado</TH>
+                  <TH>Base</TH><TH>Efectivo</TH><TH>Nequi</TH><TH>Daviplata</TH><TH>Transf.</TH>
+                  <TH>Recibido</TH><TH>Ef. esperado</TH>
+                  <TH>Contado</TH><TH>Diferencia</TH><TH>Resultado</TH><TH>Estado</TH>
                 </TR>
               </THead>
               <TBody>
                 {(sesiones as any[]).map((s: any) => {
                   const diff = s.diferencia != null ? Number(s.diferencia) : null;
                   return (
-                    <TR key={s.id}>
+                    <TR key={s.id} interactive onClick={() => setDetalleSesionId(s.id)}>
                       <TD className="font-medium text-slate-900">{s.usuario?.nombre ?? '---'}</TD>
                       <TD className="text-slate-500 text-xs">
                         <p>{dayjs(s.fechaApertura).format('DD/MM/YYYY')}</p>
@@ -358,6 +428,13 @@ export default function CajaPage() {
                         ) : '—'}
                       </TD>
                       <TD className="num">{moneda(Number(s.montoBase ?? 0))}</TD>
+                      {/* Desglose real del cierre: Nequi y Daviplata tienen columna
+                          propia en CajaSesion, así que un cobro por Nequi ya no
+                          aparece confundido con transferencia. */}
+                      <TD className="num">{s.totalEfectivo      != null ? moneda(Number(s.totalEfectivo))      : '—'}</TD>
+                      <TD className="num">{s.totalNequi         != null ? moneda(Number(s.totalNequi))         : '—'}</TD>
+                      <TD className="num">{s.totalDaviplata     != null ? moneda(Number(s.totalDaviplata))     : '—'}</TD>
+                      <TD className="num">{s.totalTransferencia != null ? moneda(Number(s.totalTransferencia)) : '—'}</TD>
                       <TD className="num font-semibold text-success-700">
                         {s.totalRecibido != null ? moneda(Number(s.totalRecibido)) : '—'}
                       </TD>
@@ -369,6 +446,14 @@ export default function CajaPage() {
                       </TD>
                       <TD className={`num font-semibold ${diff == null ? '' : diff >= -0.01 ? 'text-success-700' : 'text-danger-700'}`}>
                         {diff != null ? `${diff >= 0 ? '+' : ''}${moneda(diff)}` : '—'}
+                      </TD>
+                      <TD>
+                        {(() => {
+                          const r = s.estado === 'ABIERTA' ? null : resultadoCaja(diff);
+                          return r
+                            ? <Badge tone={r.badge}>{r.corto}</Badge>
+                            : <span className="text-slate-400">—</span>;
+                        })()}
                       </TD>
                       <TD>
                         <Badge tone={s.estado === 'ABIERTA' ? 'success' : 'neutral'} outline>
@@ -407,6 +492,11 @@ export default function CajaPage() {
         fecha={fecha}
         onSuccess={invalidarCaja}
       />
-    </div>
+      <DetalleCierreModal
+        open={!!detalleSesionId}
+        cajaSesionId={detalleSesionId}
+        onClose={() => setDetalleSesionId(null)}
+      />
+      </div>
   );
 }

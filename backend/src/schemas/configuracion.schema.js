@@ -11,6 +11,8 @@ const actualizar = z.object({
   nombreNegocio:  z.string().trim().min(1, 'Nombre del negocio requerido').max(150),
   nit:            textoOpcional(40),
   telefono:       textoOpcional(40),
+  // Varios números, uno por línea o separados por / , ;
+  telefonosContacto: textoOpcional(300),
   direccion:      textoOpcional(255),
   ciudad:         textoOpcional(120),
   // Logo en base64 (data URI). El límite de express.json acota el tamaño real.

@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import {
-  ShoppingBag, DollarSign, Hourglass, Users, ArrowUpRight, Inbox, ShieldAlert
+  ShoppingBag, DollarSign, Hourglass, Users, ArrowUpRight, Inbox, ShieldAlert,
+  Bell, FilePenLine
 } from 'lucide-react';
 import api from '../services/api';
 import { useNavStore } from '../store/nav.store';
@@ -27,8 +28,8 @@ const fetchClientes  = () => api.get('/clientes').then((r) => r.data);
 const fetchSesion    = () => api.post('/sesiones-trabajo/abrir').then((r) => r.data);
 const fetchEmpleados = () => api.get('/reportes/por-empleado').then((r) => r.data);
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../lib/currency';
+const moneda = formatCurrencyCOP;
 
 const ESTADOS_ORDER = ['RECIBIDO', 'EN_PROCESO', 'LISTO', 'ENTREGADO', 'CANCELADO'] as const;
 
@@ -49,6 +50,16 @@ export default function DashboardPage() {
   const clientes  = useQuery({ queryKey: ['clientes'],               queryFn: fetchClientes  });
   const sesion    = useQuery({ queryKey: ['sesion-trabajo', 'actual'], queryFn: fetchSesion });
   const empleados = useQuery({ queryKey: ['reportes', 'por-empleado'], queryFn: fetchEmpleados });
+  const alertas   = useQuery({
+    queryKey: ['reportes', 'alertas-dia'],
+    queryFn: () => api.get('/reportes/alertas-dia').then((r) => r.data)
+  });
+
+  const edicionesHoy: any[] = alertas.data?.ediciones ?? [];
+  const garantiasHoy: any[] = alertas.data?.garantias ?? [];
+  const sinAlertas = edicionesHoy.length === 0 && garantiasHoy.length === 0;
+  const ordenLabel = (numero: any) => (numero != null ? `ORD-${String(numero).padStart(6, '0')}` : 'ORD —');
+  const clienteLabel = (a: any) => a.clienteIdentificador || a.clienteNombre || '—';
 
   const ventasDia    = Number(dia.data?.totalPagado ?? dia.data?.total ?? 0);
   const cantidadDia  = Number(dia.data?.cantidad ?? 0);
@@ -139,6 +150,87 @@ export default function DashboardPage() {
           )
         }
       </section>
+
+      {/* Alertas del día: ediciones de órdenes y garantías registradas hoy */}
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Bell size={16} /> Alertas del día</CardTitle>
+          <div className="flex items-center gap-2 text-xs">
+            <Badge tone={edicionesHoy.length ? 'warning' : 'neutral'} outline>Ediciones: {edicionesHoy.length}</Badge>
+            <Badge tone={garantiasHoy.length ? 'danger' : 'neutral'} outline>Garantías: {garantiasHoy.length}</Badge>
+          </div>
+        </CardHeader>
+        {sinAlertas ? (
+          <EmptyState compact icon={<Bell size={20} />} title="Sin novedades" description="Sin ediciones ni garantías registradas hoy." />
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 divide-y lg:divide-y-0 lg:divide-x divide-slate-100">
+            {/* Ediciones */}
+            <div className="p-5">
+              <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <FilePenLine size={13} /> Ediciones de órdenes
+              </p>
+              {edicionesHoy.length === 0 ? (
+                <p className="text-sm text-slate-400">Sin ediciones hoy.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {edicionesHoy.map((e) => (
+                    <li key={e.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-mono text-sm font-semibold text-slate-900">
+                            {ordenLabel(e.pedidoNumero)} <span className="font-sans font-normal text-slate-600">— {clienteLabel(e)}</span>
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            Editado por {e.usuarioNombre} · {dayjs(e.createdAt).format('hh:mm A')}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-700">Motivo: {e.motivo}</p>
+                          <p className="text-xs num text-slate-600">{moneda(Number(e.totalAntes))} → <span className="font-semibold">{moneda(Number(e.totalDespues))}</span></p>
+                        </div>
+                        <Button variant="secondary" className="!px-2 !py-1 text-xs shrink-0"
+                          onClick={() => navegar({ kind: 'pedido-detalle', id: e.pedidoId })}>
+                          Ver pedido
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {/* Garantías */}
+            <div className="p-5">
+              <p className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <ShieldAlert size={13} /> Garantías registradas
+              </p>
+              {garantiasHoy.length === 0 ? (
+                <p className="text-sm text-slate-400">Sin garantías hoy.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {garantiasHoy.map((g) => (
+                    <li key={g.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-mono text-sm font-semibold text-slate-900">
+                            {ordenLabel(g.pedidoNumero)} <span className="font-sans font-normal text-slate-600">— {clienteLabel(g)}</span>
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            Registrada por {g.usuarioNombre} · {dayjs(g.createdAt).format('hh:mm A')}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-700">{g.descripcion}</p>
+                          <Badge tone="warning" outline>{String(g.estado).replace('_', ' ')}</Badge>
+                        </div>
+                        <Button variant="secondary" className="!px-2 !py-1 text-xs shrink-0"
+                          onClick={() => navegar({ kind: 'pedido-detalle', id: g.pedidoId })}>
+                          Ver pedido
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
 
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         {/* Pedidos recientes */}

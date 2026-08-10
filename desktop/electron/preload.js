@@ -3,7 +3,20 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   dbQuery: (sql, params) => ipcRenderer.invoke('db:query', sql, params),
   dbRun:   (sql, params) => ipcRenderer.invoke('db:run',   sql, params),
-  dbGet:   (sql, params) => ipcRenderer.invoke('db:get',   sql, params)
+  dbGet:   (sql, params) => ipcRenderer.invoke('db:get',   sql, params),
+  // Borra la copia local del escritorio tras restablecer la operación.
+  dbResetOperacion: () => ipcRenderer.invoke('db:reset-operacion')
+});
+
+contextBridge.exposeInMainWorld('shellAPI', {
+  openPath: (ruta) => ipcRenderer.invoke('shell:open-path', ruta)
+});
+
+/* Guardado de exportaciones (Excel). `datos` viaja como array de bytes porque
+ * los ArrayBuffer no cruzan el puente de contexto de forma fiable. */
+contextBridge.exposeInMainWorld('exportAPI', {
+  guardarArchivo: (nombreSugerido, datos, filtros) =>
+    ipcRenderer.invoke('export:guardar-archivo', { nombreSugerido, datos, filtros })
 });
 
 contextBridge.exposeInMainWorld('configAPI', {

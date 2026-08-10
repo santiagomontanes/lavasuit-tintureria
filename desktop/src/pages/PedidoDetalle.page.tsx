@@ -1,12 +1,15 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CalendarDays, CreditCard, FileText, PackageCheck, Printer, RefreshCw, ShieldAlert, Shirt, Trash2, UserRound } from 'lucide-react';
+import { ArrowLeft, CalendarDays, CreditCard, FileText, History, Layers, PackageCheck, Pencil, Printer, RefreshCw, ShieldAlert, Shirt, Trash2, UserRound } from 'lucide-react';
 import dayjs from 'dayjs';
 import api, { resolveBackendUrl } from '../services/api';
 import { useNavStore } from '../store/nav.store';
 import { useToastStore } from '../store/toast.store';
+import { useAuthStore } from '../store/auth.store';
 import CambiarEstadoModal from '../components/forms/CambiarEstado.modal';
+import EditarPedidoModal from '../components/forms/EditarPedido.modal';
 import RegistrarPagoModal from '../components/forms/RegistrarPago.modal';
+import { marcaTag, coloresTexto } from '../lib/itemFormat';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Button from '../components/ui/Button';
 import Badge, { PEDIDO_ESTADO_LABEL, PEDIDO_ESTADO_TONE } from '../components/ui/Badge';
@@ -19,6 +22,7 @@ import { Select } from '../components/ui/Input';
 import { cn } from '../lib/cn';
 import ReciboPedido, { generarHtmlRecibo, TipoRecibo } from '../components/recibo/ReciboPedido';
 import { printHtml } from '../utils/print';
+import { totalAPagar as calcTotalAPagar, pendienteDePedido } from '../lib/saldos';
 
 const garantiaTone: Record<string, 'danger' | 'warning' | 'success' | 'neutral'> = {
   ABIERTA: 'danger',
@@ -29,8 +33,8 @@ const garantiaTone: Record<string, 'danger' | 'warning' | 'success' | 'neutral'>
 
 const GARANTIA_ESTADOS = ['ABIERTA', 'EN_REVISION', 'RESUELTA', 'RECHAZADA'] as const;
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../lib/currency';
+const moneda = formatCurrencyCOP;
 
 interface Props { id: string; }
 
@@ -38,19 +42,29 @@ export default function PedidoDetallePage({ id }: Props) {
   const navegar = useNavStore((s) => s.navegar);
   const qc      = useQueryClient();
   const toast   = useToastStore();
+  const esAdmin = useAuthStore((s) => s.usuario?.rol === 'ADMIN');
 
   const [openEstado,   setOpenEstado]   = useState(false);
+  const [openEditar,   setOpenEditar]   = useState(false);
   const [openPago,     setOpenPago]     = useState(false);
   const [openDelete,   setOpenDelete]   = useState(false);
+  const [openConsolidar, setOpenConsolidar] = useState(false);
   const [openEntregar, setOpenEntregar] = useState(false);
   const [openRecibo,   setOpenRecibo]   = useState<TipoRecibo | null>(null);
   const [fotoEntrega,  setFotoEntrega]  = useState<File | null>(null);
   const [obsEntrega,   setObsEntrega]   = useState('');
+  const [snapshotVer,  setSnapshotVer]  = useState<{ snap: any; titulo: string } | null>(null);
   const fotoInputRef = useRef<HTMLInputElement>(null);
 
   const { data: pedido, isLoading, isError } = useQuery({
     queryKey: ['pedido', id],
     queryFn:  () => api.get(`/pedidos/${id}`).then((r) => r.data)
+  });
+
+  const { data: historialEdiciones = [] } = useQuery({
+    queryKey: ['pedido-historial', id],
+    queryFn:  () => api.get(`/pedidos/${id}/historial-ediciones`).then((r) => r.data),
+    enabled:  !!id
   });
 
   const { data: garantiasData = [] } = useQuery({
@@ -59,18 +73,31 @@ export default function PedidoDetallePage({ id }: Props) {
     enabled:  !!id
   });
 
+  const { data: config } = useQuery({
+    queryKey: ['configuracion-empresa'],
+    queryFn:  () => api.get('/configuracion/empresa').then((r) => r.data)
+  });
+  const mostrarNombre = config?.mostrarNombreEnRecibo ?? true;
+  const exigeFoto     = config?.exigirFotoEntrega ?? false;
+  const mostrarConsolidada = config?.mostrarDeudaConsolidadaEnFactura ?? false;
+
   const totalNum = Number(pedido?.total ?? 0);
+  const deudaAnterior = Number(pedido?.deudaConsolidada ?? 0);
+  const totalAPagar = pedido ? calcTotalAPagar(pedido) : totalNum;
   const pagado = useMemo(
     () => (pedido?.pagos ?? []).reduce((acc: number, p: any) => acc + Number(p.monto), 0),
     [pedido?.pagos]
   );
-  const saldo = Math.max(0, totalNum - pagado);
+  // Si es factura ORIGEN consolidada, su saldo se cobra en la destino → 0 aquí.
+  const esOrigenConsolidado = !!pedido?.consolidadoEnPedidoId;
+  const consolidadoEnNumero = pedido?.consolidadoEn?.numero ?? null;
+  const saldo = pedido ? pendienteDePedido(pedido, pagado) : 0;
 
   const entregar = useMutation({
     mutationFn: () => {
-      if (!fotoEntrega) throw new Error('Foto obligatoria');
+      if (exigeFoto && !fotoEntrega) throw new Error('Foto obligatoria');
       const fd = new FormData();
-      fd.append('foto', fotoEntrega);
+      if (fotoEntrega) fd.append('foto', fotoEntrega);
       if (obsEntrega.trim()) fd.append('observacion', obsEntrega.trim());
       return api.post(`/pedidos/${id}/entregar`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' }
@@ -87,6 +114,32 @@ export default function PedidoDetallePage({ id }: Props) {
     },
     onError: (e: any) => {
       toast.show(e?.response?.data?.error || 'No se pudo registrar la entrega', 'error');
+    }
+  });
+
+  /* Deuda anterior del cliente disponible para consolidar (otras facturas con
+   * saldo pendiente, distintas de esta orden). */
+  const { data: deudaCliente } = useQuery({
+    queryKey: ['cliente-deuda', pedido?.clienteId],
+    queryFn:  () => api.get(`/clientes/${pedido.clienteId}/deuda`).then((r) => r.data),
+    enabled:  !!pedido?.clienteId && esAdmin
+  });
+  const facturasOtras = (deudaCliente?.facturas ?? []).filter((f: any) => f.pedidoId !== id);
+  const deudaAnteriorDisponible = facturasOtras.reduce((acc: number, f: any) => acc + Number(f.pendiente ?? 0), 0);
+
+  const consolidar = useMutation({
+    mutationFn: () => api.post(`/pedidos/${id}/consolidar-deuda`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pedido', id] });
+      qc.invalidateQueries({ queryKey: ['pedidos'] });
+      qc.invalidateQueries({ queryKey: ['cliente-deuda'] });
+      qc.invalidateQueries({ queryKey: ['reportes'] });
+      qc.invalidateQueries({ queryKey: ['caja'] });
+      toast.show('Deuda anterior consolidada en esta factura', 'success');
+      setOpenConsolidar(false);
+    },
+    onError: (e: any) => {
+      toast.show(e?.response?.data?.error || 'No se pudo consolidar la deuda', 'error');
     }
   });
 
@@ -139,6 +192,8 @@ export default function PedidoDetallePage({ id }: Props) {
   const garantias = garantiasData;
   const puedeRegistrarPago = saldo > 0 && pedido.estado !== 'CANCELADO';
   const puedeEntregar = pedido.estado !== 'ENTREGADO' && pedido.estado !== 'CANCELADO';
+  const puedeConsolidar = esAdmin && !esOrigenConsolidado
+    && pedido.estado !== 'CANCELADO' && deudaAnteriorDisponible > 0;
   const evidencia = pedido.evidenciaEntrega ?? null;
 
   return (
@@ -177,6 +232,16 @@ export default function PedidoDetallePage({ id }: Props) {
           <Button variant="secondary" leftIcon={<RefreshCw size={15} />} onClick={() => setOpenEstado(true)}>
             Cambiar estado
           </Button>
+          {esAdmin && (
+            <Button variant="secondary" leftIcon={<Pencil size={15} />} onClick={() => setOpenEditar(true)}>
+              Editar orden
+            </Button>
+          )}
+          {puedeConsolidar && (
+            <Button variant="secondary" leftIcon={<Layers size={15} />} onClick={() => setOpenConsolidar(true)}>
+              Llamar deuda anterior
+            </Button>
+          )}
           {puedeEntregar && (
             <Button leftIcon={<PackageCheck size={15} />} onClick={() => setOpenEntregar(true)}>
               Entregar
@@ -206,6 +271,20 @@ export default function PedidoDetallePage({ id }: Props) {
               )}
               <p className="mt-0.5 font-semibold text-slate-950">{pedido.cliente?.nombre ?? '---'}</p>
               <p className="text-sm text-slate-500">{pedido.cliente?.telefono ?? 'Sin telefono'}</p>
+
+              {/* Encargado de entregar: dato del PEDIDO (encargadoEntrega), no
+                  el empleado que lo creó (ese aparece en la tarjeta "Entrega"). */}
+              <div className="mt-3 border-t border-slate-100 pt-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Encargado de entregar
+                </p>
+                <p className={cn(
+                  'mt-0.5 font-semibold',
+                  pedido.encargadoEntrega ? 'text-slate-950' : 'italic text-slate-400'
+                )}>
+                  {pedido.encargadoEntrega || 'No registrado'}
+                </p>
+              </div>
             </div>
           </CardBody>
         </Card>
@@ -227,9 +306,20 @@ export default function PedidoDetallePage({ id }: Props) {
           <CardBody>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Resumen de pago</p>
             <div className="mt-3 space-y-2">
-              <div className="flex justify-between text-sm"><span className="text-slate-500">Ordenado</span><span className="num font-semibold">{moneda(totalNum)}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-slate-500">Pagado</span><span className="num font-semibold text-success-700">{moneda(pagado)}</span></div>
-              <div className="flex justify-between border-t border-slate-100 pt-2 text-sm"><span className="font-semibold text-slate-700">Pendiente</span><span className={cn('num text-lg font-bold', saldo > 0 ? 'text-warning-700' : 'text-success-700')}>{moneda(saldo)}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-slate-500">Total factura</span><span className="num font-semibold">{moneda(totalNum)}</span></div>
+              {deudaAnterior > 0 && (
+                <>
+                  <div className="flex justify-between text-sm"><span className="text-warning-700">Deuda anterior</span><span className="num font-semibold text-warning-700">{moneda(deudaAnterior)}</span></div>
+                  <div className="flex justify-between border-t border-slate-100 pt-2 text-sm"><span className="font-semibold text-slate-700">Total a pagar</span><span className="num font-bold">{moneda(totalAPagar)}</span></div>
+                </>
+              )}
+              <div className="flex justify-between text-sm"><span className="text-slate-500">Abono</span><span className="num font-semibold text-success-700">{moneda(pagado)}</span></div>
+              <div className="flex justify-between border-t border-slate-100 pt-2 text-sm"><span className="font-semibold text-slate-700">Saldo total</span><span className={cn('num text-lg font-bold', saldo > 0 ? 'text-warning-700' : 'text-success-700')}>{moneda(saldo)}</span></div>
+              {esOrigenConsolidado && (
+                <p className="mt-1 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
+                  Saldo consolidado en factura {consolidadoEnNumero != null ? `#${consolidadoEnNumero}` : 'destino'}.
+                </p>
+              )}
             </div>
           </CardBody>
         </Card>
@@ -255,12 +345,14 @@ export default function PedidoDetallePage({ id }: Props) {
                 {items.map((it: any) => (
                   <TR key={it.id}>
                     <TD>
-                      <p className="font-semibold text-slate-900">{it.nombre ?? it.servicio?.nombre ?? '---'}</p>
+                      <p className="font-semibold text-slate-900">
+                        {it.nombre ?? it.servicio?.nombre ?? '---'}
+                        {marcaTag(it) && <span className="ml-2 text-xs font-normal text-slate-500">{marcaTag(it)}</span>}
+                      </p>
                       {it.observaciones && <p className="mt-1 text-xs text-slate-500">{it.observaciones}</p>}
                     </TD>
                     <TD className="text-xs">
-                      <p><span className="text-slate-400">Actual:</span> {it.colorActual || '---'}</p>
-                      <p><span className="text-slate-400">Deseado:</span> {it.colorDeseado || '---'}</p>
+                      {coloresTexto(it, { upperDestino: true }) || '---'}
                     </TD>
                     <TD align="center" className="num font-semibold">{it.cantidad}</TD>
                     <TD align="right" className="num">{moneda(Number(it.precio))}</TD>
@@ -374,6 +466,50 @@ export default function PedidoDetallePage({ id }: Props) {
         )}
       </Card>
 
+      {/* Historial de cambios (auditoría + facturas anteriores) */}
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><History size={16} /> Historial de cambios</CardTitle>
+          <Badge tone={historialEdiciones.length ? 'warning' : 'neutral'} outline>{historialEdiciones.length} edición(es)</Badge>
+        </CardHeader>
+        {historialEdiciones.length === 0 ? (
+          <EmptyState compact icon={<History size={20} />} title="Sin ediciones" description="Cuando se edite la orden, cada cambio quedará aquí con su motivo y la factura anterior." />
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {historialEdiciones.map((h: any) => (
+              <li key={h.id} className="px-5 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-900">{h.motivo}</p>
+                    <p className="text-xs text-slate-500">
+                      {h.usuario?.nombre ?? '---'} · {dayjs(h.createdAt).format('DD/MM/YYYY HH:mm')}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Total: <span className="num">{moneda(Number(h.totalAntes))}</span> → <span className="num font-semibold">{moneda(Number(h.totalDespues))}</span>
+                      {h.cambios ? ` · prendas: ${h.cambios.itemsAntes} → ${h.cambios.itemsDespues}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {h.snapshotAntes && (
+                      <Button variant="secondary" className="!px-2 !py-1 text-xs" leftIcon={<FileText size={13} />}
+                        onClick={() => setSnapshotVer({ snap: h.snapshotAntes, titulo: 'Factura anterior' })}>
+                        Factura anterior
+                      </Button>
+                    )}
+                    {h.snapshotDespues && (
+                      <Button variant="secondary" className="!px-2 !py-1 text-xs" leftIcon={<FileText size={13} />}
+                        onClick={() => setSnapshotVer({ snap: h.snapshotDespues, titulo: 'Factura después del cambio' })}>
+                        Factura después
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       {/* Evidencia de entrega */}
       <Card className="overflow-hidden">
         <CardHeader>
@@ -403,13 +539,13 @@ export default function PedidoDetallePage({ id }: Props) {
             compact
             icon={<PackageCheck size={20} />}
             title="Sin evidencia de entrega"
-            description="Al marcar el pedido como ENTREGADO se solicitará una foto obligatoria."
+            description={exigeFoto ? 'Al marcar el pedido como ENTREGADO se solicitará una foto.' : 'Al marcar el pedido como ENTREGADO la foto será opcional.'}
           />
         )}
       </Card>
 
       {/* Modal: Entregar con foto */}
-      <Modal open={openEntregar} onClose={() => { setOpenEntregar(false); setFotoEntrega(null); setObsEntrega(''); }} title="Registrar entrega" subtitle="Foto obligatoria para confirmar la entrega." size="sm">
+      <Modal open={openEntregar} onClose={() => { setOpenEntregar(false); setFotoEntrega(null); setObsEntrega(''); }} title="Registrar entrega" subtitle={exigeFoto ? 'Foto obligatoria para confirmar la entrega.' : 'La foto es opcional según la configuración.'} size="sm">
         <div className="p-6 space-y-4">
           <input
             ref={fotoInputRef}
@@ -466,7 +602,7 @@ export default function PedidoDetallePage({ id }: Props) {
             </Button>
             <Button
               leftIcon={<PackageCheck size={15} />}
-              disabled={!fotoEntrega || entregar.isPending}
+              disabled={(exigeFoto && !fotoEntrega) || entregar.isPending}
               loading={entregar.isPending}
               onClick={() => entregar.mutate()}
             >
@@ -489,13 +625,38 @@ export default function PedidoDetallePage({ id }: Props) {
             <div className="flex justify-end gap-2 px-6 py-3 border-b border-slate-100 bg-slate-50">
               <Button
                 leftIcon={<Printer size={15} />}
-                onClick={() => printHtml(generarHtmlRecibo(pedido, openRecibo, pagado))}
+                onClick={() => printHtml(generarHtmlRecibo(pedido, openRecibo, pagado, { mostrarNombre, mostrarConsolidada }))}
               >
                 Imprimir
               </Button>
             </div>
             <div className="overflow-y-auto max-h-[70vh] p-6">
-              <ReciboPedido pedido={pedido} tipo={openRecibo} pagado={pagado} />
+              <ReciboPedido pedido={pedido} tipo={openRecibo} pagado={pagado} mostrarNombre={mostrarNombre} mostrarConsolidada={mostrarConsolidada} />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal: Visor de factura anterior/después (snapshot) */}
+      <Modal
+        open={snapshotVer !== null}
+        onClose={() => setSnapshotVer(null)}
+        title={snapshotVer?.titulo ?? 'Factura'}
+        subtitle={`Pedido #${snapshotVer?.snap?.numero ?? pedido.numero ?? '---'} · ${snapshotVer?.snap?.cliente?.nombre ?? ''}`}
+        size="lg"
+      >
+        {snapshotVer && (
+          <div className="flex flex-col gap-0">
+            <div className="flex justify-end gap-2 px-6 py-3 border-b border-slate-100 bg-slate-50">
+              <Button
+                leftIcon={<Printer size={15} />}
+                onClick={() => printHtml(generarHtmlRecibo(snapshotVer.snap, 'cliente', Number(snapshotVer.snap?.pagado ?? 0), { mostrarNombre, mostrarConsolidada }))}
+              >
+                Reimprimir esta factura
+              </Button>
+            </div>
+            <div className="overflow-y-auto max-h-[70vh] p-6">
+              <ReciboPedido pedido={snapshotVer.snap} tipo="cliente" pagado={Number(snapshotVer.snap?.pagado ?? 0)} mostrarNombre={mostrarNombre} mostrarConsolidada={mostrarConsolidada} />
             </div>
           </div>
         )}
@@ -507,11 +668,27 @@ export default function PedidoDetallePage({ id }: Props) {
         pedidoId={pedido.id}
         estadoActual={pedido.estado}
       />
+      {esAdmin && (
+        <EditarPedidoModal
+          open={openEditar}
+          onClose={() => setOpenEditar(false)}
+          pedido={pedido}
+        />
+      )}
       <RegistrarPagoModal
         open={openPago}
         onClose={() => setOpenPago(false)}
         pedidoId={pedido.id}
         saldo={saldo}
+      />
+      <ConfirmDialog
+        open={openConsolidar}
+        title="Llamar deuda anterior"
+        message={`Se consolidarán ${facturasOtras.length} factura(s) anterior(es) del cliente por ${moneda(deudaAnteriorDisponible)} en esta orden #${pedido.numero ?? ''}. Las facturas anteriores quedarán en saldo $0 con referencia a esta. No entra dinero a caja: solo se reorganiza el saldo. ¿Continuar?`}
+        confirmLabel="Consolidar deuda"
+        loading={consolidar.isPending}
+        onCancel={() => setOpenConsolidar(false)}
+        onConfirm={() => consolidar.mutate()}
       />
       <ConfirmDialog
         open={openDelete}

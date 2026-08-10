@@ -22,8 +22,10 @@ model Usuario {
   pagos            Pago[]                  @relation("PagoCobrador")
   garantias        Garantia[]              @relation("GarantiaRegistradaPor")
   cambiosEstado    PedidoEstadoHistorial[] @relation("EstadoCambiadoPor")
+  edicionesPedido  PedidoEdicionHistorial[] @relation("PedidoEdicionAutor")
   sesionesTrabajo  SesionTrabajo[]
   clientesAsignados Cliente[]              @relation("ClienteAsignado")
+  rutasAsignadas   ClienteEmpleadoRuta[]  @relation("RutaEmpleado")
   cajaCierres      CajaCierre[]
   cajaSesiones     CajaSesion[]
   evidenciasEntrega EvidenciaEntrega[]
@@ -33,6 +35,13 @@ model Usuario {
   marcasEditadas   Marca[]                 @relation("MarcaEditor")
   coloresCreados   Color[]                 @relation("ColorCreador")
   coloresEditados  Color[]                 @relation("ColorEditor")
+  gastosCreados    Gasto[]                 @relation("GastoCreador")
+  gastosEditados   Gasto[]                 @relation("GastoEditor")
+  consolidacionesRealizadas ConsolidacionDeuda[] @relation("ConsolidacionAutor")
+  consolidacionesRevertidas ConsolidacionDeuda[] @relation("ConsolidacionReversor")
+  configAuditorias ConfiguracionAuditoria[] @relation("ConfiguracionAuditoriaAutor")
+  identificadoresCambiados ClienteIdentificadorHistorial[] @relation("IdentificadorCambiadoPor")
+  gastosAuditoria  GastoAuditoria[]        @relation("GastoAuditoriaAutor")
 }
 
 model Color {
@@ -78,13 +87,121 @@ model Cliente {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   creadoPor     Usuario? @relation("ClienteCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  // `asignadoA`/`asignadoAId` se CONSERVA por compatibilidad (asignación única
+  // legacy y filtro offline de mobile). La asignación real multi-empleado vive
+  // en `rutas` (tabla intermedia). No se elimina para no perder datos.
   asignadoA     Usuario? @relation("ClienteAsignado", fields: [asignadoAId], references: [id], onDelete: SetNull)
+  rutas         ClienteEmpleadoRuta[]
   pedidos       Pedido[]
+  identificadorHistorial ClienteIdentificadorHistorial[]
 
   @@unique([ordenBase, subOrden])
   @@index([creadoPorId])
   @@index([asignadoAId])
   @@index([sortKey])
+}
+
+/// #Rutas M2M: un cliente puede estar en la ruta de varios empleados a la vez.
+/// Tabla intermedia aditiva. `asignadoAId` en Cliente se conserva por compat.
+/// El orden/subOrden es POR empleado (independiente del orden global del cliente).
+model ClienteEmpleadoRuta {
+  id        String   @id @default(uuid())
+  clienteId String
+  usuarioId String
+  orden     Int?
+  subOrden  Int      @default(0)
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cliente   Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  usuario   Usuario  @relation("RutaEmpleado", fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([clienteId, usuarioId])
+  @@index([usuarioId])
+  @@index([clienteId])
+}
+
+/// Auditoría del cambio de identificador (número visible) de un cliente.
+/// Aditiva y de solo lectura: nunca se borra ni se edita. El identificador es
+/// lo que el cliente dice por teléfono ("soy el 280"), así que cambiarlo exige
+/// dejar rastro de quién, cuándo y por qué.
+/// NO toca pedidos históricos ni consecutivos: el vínculo pedido→cliente es por
+/// `clienteId` (uuid), que no cambia.
+model ClienteIdentificadorHistorial {
+  id                 String   @id @default(uuid())
+  clienteId          String
+  usuarioId          String?
+  identificadorAnterior String? @db.VarChar(40)
+  identificadorNuevo    String? @db.VarChar(40)
+  ordenBaseAnterior  Int?
+  subOrdenAnterior   Int?
+  ordenBaseNuevo     Int?
+  subOrdenNuevo      Int?
+  motivo             String   @db.Text
+  createdAt          DateTime @default(now())
+  cliente            Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  usuario            Usuario? @relation("IdentificadorCambiadoPor", fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([clienteId])
+  @@index([usuarioId])
+  @@index([createdAt])
+}
+
+/// Auditoría de ediciones y anulaciones de gastos.
+/// El alta NO se registra aquí: ya está en el propio Gasto (creadoPorId +
+/// fecha), que es la fuente para el evento "gasto creado" de la línea de
+/// tiempo. Esta tabla guarda lo que el Gasto no puede conservar por sí mismo:
+/// cómo estaba ANTES de un cambio y por qué se anuló.
+/// Aditiva y de solo lectura: nunca se edita ni se borra.
+model GastoAuditoria {
+  id              String   @id @default(uuid())
+  gastoId         String
+  usuarioId       String?
+  /// EDITADO | ANULADO
+  accion          String   @db.VarChar(20)
+  motivo          String?  @db.Text
+  valorAntes      Decimal? @db.Decimal(10, 2)
+  valorDespues    Decimal? @db.Decimal(10, 2)
+  /// Snapshot JSON del gasto antes y después del cambio.
+  snapshotAntes   String?  @db.Text
+  snapshotDespues String?  @db.Text
+  createdAt       DateTime @default(now())
+  gasto           Gasto    @relation(fields: [gastoId], references: [id], onDelete: Cascade)
+  usuario         Usuario? @relation("GastoAuditoriaAutor", fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([gastoId])
+  @@index([usuarioId])
+  @@index([createdAt])
+}
+
+/// Credenciales OAuth de Google Drive para las copias de seguridad.
+/// Mismo esquema que el proyecto de referencia (tabla `google_drive_tokens`).
+/// `usuarioId` NULL = conexión global de la instalación.
+model GoogleDriveToken {
+  id           Int      @id @default(autoincrement())
+  usuarioId    String?  @map("user_id")
+  accessToken  String?  @map("access_token")  @db.Text
+  refreshToken String?  @map("refresh_token") @db.Text
+  scope        String?  @db.Text
+  tokenType    String?  @map("token_type")    @db.VarChar(100)
+  expiryDate   BigInt?  @map("expiry_date")
+  createdAt    DateTime @default(now())       @map("created_at")
+  updatedAt    DateTime @updatedAt            @map("updated_at")
+
+  @@map("google_drive_tokens")
+}
+
+/// Registro de los backups subidos a Google Drive (tabla `backups`).
+/// Estados: CREATED | UPLOADING | DONE | ERROR.
+model BackupDrive {
+  id          Int      @id @default(autoincrement())
+  fileName    String   @map("file_name")     @db.VarChar(255)
+  driveFileId String?  @map("drive_file_id") @db.VarChar(255)
+  status      String   @default("CREATED")   @db.VarChar(50)
+  message     String?  @db.Text
+  createdAt   DateTime @default(now())       @map("created_at")
+
+  @@map("backups")
 }
 
 model Servicio {
@@ -145,6 +262,14 @@ model Pedido {
   sesionTrabajoId String?
   estado          EstadoPedido @default(RECIBIDO)
   total           Decimal      @db.Decimal(10, 2)
+  encargadoEntrega String?     @db.VarChar(120)
+  // Deuda anterior del cliente absorbida por ESTA orden (orden destino).
+  // `total` sigue siendo SOLO el valor de las prendas; la deuda es aparte para
+  // no inflar ventas/valorOrdenado. "Total a pagar" = total + deudaConsolidada.
+  deudaConsolidada Decimal     @default(0) @db.Decimal(10, 2)
+  // En las órdenes ORIGEN (viejas) apunta a la orden destino que absorbió su
+  // saldo. Si está seteado, su pendiente cuenta como 0 (factura migrada).
+  consolidadoEnPedidoId String?
   fechaEntrega    DateTime?
   notas           String?      @db.Text
   sincronizado    Boolean      @default(false)
@@ -156,16 +281,48 @@ model Pedido {
   usuario         Usuario      @relation("PedidoCreador", fields: [usuarioId], references: [id])
   eliminadoPor    Usuario?     @relation("PedidoEliminador", fields: [eliminadoPorId], references: [id], onDelete: SetNull)
   sesionTrabajo   SesionTrabajo? @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+  consolidadoEn   Pedido?      @relation("PedidoConsolidacion", fields: [consolidadoEnPedidoId], references: [id], onDelete: SetNull)
+  consolidados    Pedido[]     @relation("PedidoConsolidacion")
   items           PedidoItem[]
   pagos           Pago[]
   garantias       Garantia[]
   historialEstados PedidoEstadoHistorial[]
+  edicionesHistorial PedidoEdicionHistorial[]
   evidenciaEntrega EvidenciaEntrega?
+  consolidacionesOrigen  ConsolidacionDeuda[] @relation("ConsolidacionOrigen")
+  consolidacionesDestino ConsolidacionDeuda[] @relation("ConsolidacionDestino")
 
   @@index([eliminadoEn])
   @@index([usuarioId])
   @@index([sesionTrabajoId])
   @@index([eliminadoPorId])
+  @@index([consolidadoEnPedidoId])
+}
+
+/// Consolidación de deuda anterior (punto 9). Aditiva, auditable y reversible.
+/// Una fila por factura ORIGEN migrada hacia una orden DESTINO. NO crea pagos
+/// ni mueve caja: sólo reorganiza saldos pendientes. `montoConsolidado` es el
+/// saldo que tenía la factura origen al momento de consolidar.
+model ConsolidacionDeuda {
+  id               String   @id @default(uuid())
+  pedidoDestinoId  String
+  pedidoOrigenId   String
+  montoConsolidado Decimal  @db.Decimal(10, 2)
+  usuarioId        String?
+  motivo           String   @db.Text
+  revertidoEn      DateTime?
+  revertidoPorId   String?
+  createdAt        DateTime @default(now())
+  pedidoDestino    Pedido   @relation("ConsolidacionDestino", fields: [pedidoDestinoId], references: [id])
+  pedidoOrigen     Pedido   @relation("ConsolidacionOrigen",  fields: [pedidoOrigenId],  references: [id])
+  usuario          Usuario? @relation("ConsolidacionAutor",    fields: [usuarioId],      references: [id], onDelete: SetNull)
+  revertidoPor     Usuario? @relation("ConsolidacionReversor", fields: [revertidoPorId], references: [id], onDelete: SetNull)
+
+  @@index([pedidoDestinoId])
+  @@index([pedidoOrigenId])
+  @@index([usuarioId])
+  @@index([revertidoEn])
+  @@index([createdAt])
 }
 
 enum EstadoPedido {
@@ -204,15 +361,55 @@ model Pago {
   pedidoId        String
   usuarioId       String?
   sesionTrabajoId String?
+  // Vínculo del pago con la sesión de caja en que se recibió. El arqueo de caja
+  // se calcula SOLO con los pagos de la sesión (mismo criterio ESTRICTO que los
+  // gastos) para que Mobile, Backend y Desktop muestren exactamente los mismos
+  // valores para el mismo cajaSesionId. Antes el backend filtraba pagos por
+  // fecha [apertura, ahora] + usuario, criterio distinto al de Mobile (estricto
+  // por sesión) → efectivoEsperado/diferencia divergían al cerrar/sincronizar.
+  cajaSesionId    String?
   monto           Decimal    @db.Decimal(10, 2)
   metodo          MetodoPago
   createdAt       DateTime   @default(now())
   pedido          Pedido     @relation(fields: [pedidoId], references: [id])
   usuario         Usuario?   @relation("PagoCobrador", fields: [usuarioId], references: [id])
   sesionTrabajo   SesionTrabajo? @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+  cajaSesion      CajaSesion?    @relation(fields: [cajaSesionId], references: [id], onDelete: SetNull)
 
   @@index([usuarioId])
   @@index([sesionTrabajoId])
+  @@index([cajaSesionId])
+}
+
+/// Gasto del negocio para contabilidad básica (salidas de dinero
+/// independientes de los pagos de clientes). Soft-delete vía deletedAt.
+model Gasto {
+  id               String      @id @default(uuid())
+  fecha            DateTime    @default(now())
+  concepto         String      @db.VarChar(150)
+  categoria        String      @db.VarChar(60)
+  valor            Decimal     @db.Decimal(10, 2)
+  metodoPago       MetodoPago?
+  descripcion      String?     @db.Text
+  creadoPorId      String?
+  actualizadoPorId String?
+  // Vínculo del gasto con la sesión de caja en que se registró. El arqueo de
+  // caja se calcula SOLO con los gastos de la sesión (no por día) para que al
+  // abrir una caja nueva los gastos arranquen en 0 (puntos 2 y 5).
+  cajaSesionId     String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  deletedAt        DateTime?
+  creadoPor        Usuario?    @relation("GastoCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  actualizadoPor   Usuario?    @relation("GastoEditor",  fields: [actualizadoPorId], references: [id], onDelete: SetNull)
+  cajaSesion       CajaSesion? @relation(fields: [cajaSesionId], references: [id], onDelete: SetNull)
+  auditoria        GastoAuditoria[]
+
+  @@index([fecha])
+  @@index([categoria])
+  @@index([creadoPorId])
+  @@index([cajaSesionId])
+  @@index([deletedAt])
 }
 
 enum MetodoPago {
@@ -249,9 +446,41 @@ model PedidoEstadoHistorial {
   usuarioId    String?
   estadoAnterior EstadoPedido?
   estadoNuevo  EstadoPedido
+  accion        String?      @db.VarChar(40)
+  observacion   String?      @db.Text
+  conFoto       Boolean      @default(false)
+  /// Quién originó el cambio de estado:
+  ///   null / 'MANUAL' → lo hizo una persona (aparece en la actividad del empleado)
+  ///   'AUTO_PAGO'     → efecto colateral de un abono que cubrió las prendas
+  ///                     (auto-entrega). Se CONSERVA como evidencia contable,
+  ///                     pero NO se lista como movimiento del empleado: nadie
+  ///                     ejecutó esa acción. Ver pagos.controller → auto-entrega.
+  origen        String?      @db.VarChar(20)
   createdAt    DateTime     @default(now())
   pedido       Pedido       @relation(fields: [pedidoId], references: [id])
   usuario      Usuario?     @relation("EstadoCambiadoPor", fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([pedidoId])
+  @@index([usuarioId])
+  @@index([createdAt])
+}
+
+/// Auditoría de ediciones de una orden ya creada. Guarda quién, cuándo, motivo
+/// (obligatorio) y snapshots completos antes/después para poder ver/reimprimir
+/// la factura anterior. Aditivo; nunca se borra (solo lectura tras crearse).
+model PedidoEdicionHistorial {
+  id                  String   @id @default(uuid())
+  pedidoId            String
+  usuarioId           String?
+  motivo              String   @db.Text
+  cambiosJson         String?  @db.LongText
+  snapshotAntesJson   String   @db.LongText
+  snapshotDespuesJson String   @db.LongText
+  totalAntes          Decimal  @db.Decimal(10, 2)
+  totalDespues        Decimal  @db.Decimal(10, 2)
+  createdAt           DateTime @default(now())
+  pedido              Pedido   @relation(fields: [pedidoId], references: [id])
+  usuario             Usuario? @relation("PedidoEdicionAutor", fields: [usuarioId], references: [id], onDelete: SetNull)
 
   @@index([pedidoId])
   @@index([usuarioId])
@@ -328,13 +557,25 @@ model CajaSesion {
   // Campos calculados y persistidos al cerrar
   efectivoContado     Decimal?           @db.Decimal(10, 2)
   totalEfectivo       Decimal?           @db.Decimal(10, 2)
+  // NEQUI y DAVIPLATA se persisten aparte: antes el snapshot del cierre solo
+  // guardaba efectivo/transferencia/tarjeta/otro, así que al reabrir un cierre
+  // histórico los cobros por Nequi quedaban indistinguibles de transferencia.
+  totalNequi          Decimal?           @db.Decimal(10, 2)
+  totalDaviplata      Decimal?           @db.Decimal(10, 2)
   totalTransferencia  Decimal?           @db.Decimal(10, 2)
   totalTarjeta        Decimal?           @db.Decimal(10, 2)
   totalOtro           Decimal?           @db.Decimal(10, 2)
   totalRecibido       Decimal?           @db.Decimal(10, 2)
+  totalGastos         Decimal?           @db.Decimal(10, 2)
+  totalGastosEfectivo Decimal?           @db.Decimal(10, 2)
   totalPendiente      Decimal?           @db.Decimal(10, 2)
   efectivoEsperado    Decimal?           @db.Decimal(10, 2)
   diferencia          Decimal?           @db.Decimal(10, 2)
+  /// Conteo físico por denominación al cerrar, como JSON
+  /// {"100000":2,"50000":3,...}. Solo billetes/monedas: nunca incluye Nequi ni
+  /// otros métodos digitales. Informativo/auditoría; el valor que manda es
+  /// `efectivoContado` (que es su suma).
+  denominacionesJson  String?            @db.Text
   observacionCierre   String?            @db.Text
 
   estado              CajaSesionEstado   @default(ABIERTA)
@@ -343,6 +584,8 @@ model CajaSesion {
 
   usuario             Usuario            @relation(fields: [usuarioId], references: [id])
   sesionTrabajo       SesionTrabajo?     @relation(fields: [sesionTrabajoId], references: [id], onDelete: SetNull)
+  gastos              Gasto[]
+  pagos               Pago[]
 
   @@index([usuarioId, estado])
   @@index([sesionTrabajoId])
@@ -401,13 +644,58 @@ model ConfiguracionEmpresa {
   nombreNegocio    String   @default("LavaSuit") @db.VarChar(150)
   nit              String?  @db.VarChar(40)
   telefono         String?  @db.VarChar(40)
+  /// Teléfonos del bloque CONTACTO del recibo. Uno por línea (o separados por
+  /// "/", "," o ";"). Campo aparte de `telefono` porque ese es VarChar(40) —no
+  /// alcanza para tres números— y porque el del recibo es una lista, no un dato
+  /// único. Si está vacío, el recibo cae a `telefono`.
+  telefonosContacto String? @db.Text
   direccion        String?  @db.VarChar(255)
   ciudad           String?  @db.VarChar(120)
   logoBase64       String?  @db.LongText
   politicasTexto   String?  @db.Text
   garantiaTexto    String?  @db.Text
   pieRecibo        String?  @db.Text
+  // Opciones avanzadas de operación. Todas con default = comportamiento actual.
+  mostrarNombreEnRecibo  Boolean @default(true)
+  descontarGastosDeCaja  Boolean @default(true)
+  exigirFotoCambioEstado Boolean @default(true)
+  exigirFotoEntrega Boolean @default(false)
+  solicitarMontoRecibido Boolean @default(true)
+  // Solo visualización del recibo: si está activo muestra el desglose de la
+  // deuda anterior consolidada. La lógica financiera NO cambia. Default false.
+  mostrarDeudaConsolidadaEnFactura Boolean @default(false)
+  // Genera un backup automático al cerrar el día (cierre de caja). Default true.
+  backupAutomaticoAlCerrarDia Boolean @default(true)
+  /// Marca de tiempo del último "Restablecer operación".
+  /// Es la señal que usan Mobile y Desktop para borrar SU copia local: cada
+  /// dispositivo guarda la última que aplicó y, si el servidor reporta una más
+  /// nueva, vacía sus tablas operativas y su cola de sincronización. Sin esto,
+  /// un celular con datos viejos volvería a subir lo que se acabó de borrar.
+  operacionResetAt DateTime?
+  // Hash (bcrypt) de la contraseña de Opciones Avanzadas. Null = aún no creada.
+  configPasswordHash String? @db.VarChar(255)
+  // Clave administrativa para cerrar caja SIN conexión (mobile). Se guarda en
+  // texto plano porque la verificación ocurre offline en el dispositivo; sin
+  // ella, NO se permite cerrar caja offline. Null/"" = función deshabilitada
+  // (offline siempre bloqueado). Punto 2.
+  claveCajaOffline String? @db.VarChar(120)
   actualizadoPorId String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+/// Auditoría de cambios en Opciones Avanzadas (punto: quién, qué, antes/después,
+/// cuándo). Solo lectura tras crearse. Categoría "Configuraciones".
+model ConfiguracionAuditoria {
+  id            String   @id @default(uuid())
+  usuarioId     String?
+  campo         String   @db.VarChar(80)
+  etiqueta      String?  @db.VarChar(150)
+  valorAnterior String?  @db.VarChar(255)
+  valorNuevo    String?  @db.VarChar(255)
+  createdAt     DateTime @default(now())
+  usuario       Usuario? @relation("ConfiguracionAuditoriaAutor", fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([usuarioId])
+  @@index([createdAt])
 }

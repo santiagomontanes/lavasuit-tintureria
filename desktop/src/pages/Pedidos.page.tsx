@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileText, Inbox, Plus, Printer, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react';
+import {
+  ChevronLeft, ChevronRight, Download, FileText, Inbox, Plus, Printer,
+  RefreshCw, Search, SlidersHorizontal, X
+} from 'lucide-react';
 import { printResumenOrdenes } from '../utils/printResumenOrdenes';
 import dayjs from 'dayjs';
 import api from '../services/api';
@@ -15,6 +18,8 @@ import { Table, TableContainer, TBody, TD, TH, THead, TR } from '../components/u
 import { Card, CardBody } from '../components/ui/Card';
 import { inputClassName, Field, Select } from '../components/ui/Input';
 import { cn } from '../lib/cn';
+import { useToastStore } from '../store/toast.store';
+import { guardarArchivoExcel } from '../lib/guardarArchivo';
 
 const ESTADOS = ['', 'RECIBIDO', 'EN_PROCESO', 'LISTO', 'ENTREGADO', 'CANCELADO'] as const;
 
@@ -26,16 +31,24 @@ interface Filtros {
   usuarioId?: string;
 }
 
-const fetchPedidos = async (f: Filtros) => {
-  const params: Record<string, string> = {};
+/** Tamaños de página ofrecidos. El backend acepta hasta 500. */
+const TAMANOS_PAGINA = [50, 100, 200, 500] as const;
+
+/* Paginación REAL contra el servidor: se pide exactamente la página y el
+ * tamaño elegidos. Antes se traían siempre 50 (o 200 con filtros) y no había
+ * forma de llegar a los pedidos más viejos. La búsqueda también viaja al
+ * servidor (`q`), así que busca sobre TODA la base, no sobre la página. */
+const fetchPedidos = async (f: Filtros, page: number, pageSize: number, q: string) => {
+  const params: Record<string, string> = {
+    page:  String(page),
+    limit: String(pageSize)
+  };
   if (f.estado)    params.estado    = f.estado;
   if (f.desde)     params.desde     = f.desde;
   if (f.hasta)     params.hasta     = f.hasta;
   if (f.clienteId) params.clienteId = f.clienteId;
   if (f.usuarioId) params.usuarioId = f.usuarioId;
-  // Pedimos un límite alto cuando hay filtros explícitos para no recortar
-  // resultados; si no hay filtros, mantenemos paginación corta (últimos).
-  params.limit = String(f.desde || f.hasta || f.clienteId || f.usuarioId ? 200 : 50);
+  if (q.trim())    params.q         = q.trim();
   const { data } = await api.get('/pedidos', { params });
   return data;
 };
@@ -50,21 +63,39 @@ const fetchEmpleadosLite = async () => {
   return data as Array<{ id: string; nombre: string; rol: string; activo: boolean }>;
 };
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../lib/currency';
+import { sumaPagos, pendienteDePedido } from '../lib/saldos';
+const moneda = formatCurrencyCOP;
 
 export default function PedidosPage() {
   const [filtros,   setFiltros]   = useState<Filtros>({ estado: '' });
   const [busqueda,  setBusqueda]  = useState('');
+  const [busquedaDeb, setBusquedaDeb] = useState('');
   const [openNuevo, setOpenNuevo] = useState(false);
   const [mostrarFiltros, setMostrarFiltros] = useState(false);
+  const [page,      setPage]      = useState(1);
+  const [pageSize,  setPageSize]  = useState<number>(50);
+  const [exportando, setExportando] = useState(false);
 
   const qc      = useQueryClient();
   const navegar = useNavStore((s) => s.navegar);
+  const toast   = useToastStore((s) => s.show);
+
+  // La búsqueda viaja al servidor; se espera a que el usuario deje de escribir.
+  useEffect(() => {
+    const t = setTimeout(() => setBusquedaDeb(busqueda), 350);
+    return () => clearTimeout(t);
+  }, [busqueda]);
+
+  /* Cambiar filtros, búsqueda o tamaño de página vuelve a la página 1: quedarse
+   * en la página 7 de un resultado que ahora tiene 2 mostraría una tabla vacía.
+   * Los filtros NO se pierden al pasar de página (viven en su propio estado). */
+  useEffect(() => { setPage(1); }, [filtros, busquedaDeb, pageSize]);
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['pedidos', filtros],
-    queryFn:  () => fetchPedidos(filtros)
+    queryKey: ['pedidos', filtros, page, pageSize, busquedaDeb],
+    queryFn:  () => fetchPedidos(filtros, page, pageSize, busquedaDeb),
+    placeholderData: (prev) => prev   // evita el parpadeo al cambiar de página
   });
 
   const { data: clientes = [] } = useQuery({
@@ -105,28 +136,52 @@ export default function PedidosPage() {
     setFiltros((f) => ({ ...f, desde: d || undefined, hasta: h || undefined }));
   };
 
-  const pedidos: any[] = data?.pedidos ?? [];
-  const pedidosFiltrados = useMemo(() => {
-    const q = busqueda.trim().toLowerCase();
-    if (!q) return pedidos;
-    return pedidos.filter((p) =>
-      String(p.numero ?? '').includes(q) ||
-      (p.cliente?.nombre ?? '').toLowerCase().includes(q) ||
-      (p.cliente?.telefono ?? '').toLowerCase().includes(q)
-    );
-  }, [pedidos, busqueda]);
+  /* El filtrado ya lo hizo el servidor (búsqueda por número, nombre o código
+   * del cliente — nunca por teléfono). Aquí solo se muestra lo que llegó. */
+  const pedidosFiltrados: any[] = data?.pedidos ?? [];
+
+  const total       = Number(data?.total ?? 0);
+  const totalPages  = Math.max(1, Number(data?.totalPages ?? data?.pages ?? 1));
+  const hasNext     = data?.hasNext ?? page < totalPages;
+  const hasPrevious = data?.hasPrevious ?? page > 1;
+  const desdeFila   = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const hastaFila   = Math.min(total, (page - 1) * pageSize + pedidosFiltrados.length);
 
   const resumen = useMemo(() => pedidosFiltrados.reduce((acc, p) => {
     const total = Number(p.total ?? 0);
-    const pagado = Number(p.totalPagado ?? p.pagado ?? 0);
+    const pagado = Number(p.totalPagado ?? p.pagado ?? sumaPagos(p));
     acc.total += total;
     acc.pagado += pagado;
-    acc.pendiente += Math.max(0, Number(p.pendiente ?? total - pagado));
+    acc.pendiente += Number(p.pendiente ?? pendienteDePedido(p, pagado));
     return acc;
   }, { total: 0, pagado: 0, pendiente: 0 }), [pedidosFiltrados]);
 
   const filtrosActivos =
     !!filtros.desde || !!filtros.hasta || !!filtros.clienteId || !!filtros.usuarioId || !!filtros.estado;
+
+  /* Exporta a Excel EXACTAMENTE el resultado filtrado (mismos parámetros que la
+   * consulta de la tabla, sin paginar). Es solo lectura. */
+  const exportarFiltrados = async () => {
+    setExportando(true);
+    try {
+      const params: Record<string, string> = { soloPedidos: 'true' };
+      if (filtros.estado)    params.estado    = filtros.estado;
+      if (filtros.desde)     params.desde     = filtros.desde;
+      if (filtros.hasta)     params.hasta     = filtros.hasta;
+      if (filtros.clienteId) params.clienteId = filtros.clienteId;
+      if (filtros.usuarioId) params.usuarioId = filtros.usuarioId;
+      if (busquedaDeb.trim()) params.q        = busquedaDeb.trim();
+      if (!filtros.desde && !filtros.hasta) params.todos = 'true';
+
+      const res = await api.get('/exportacion/excel', { params, responseType: 'arraybuffer' });
+      const ruta = await guardarArchivoExcel(res.data, `LavaSuit_pedidos_${dayjs().format('YYYY-MM-DD_HHmm')}.xlsx`);
+      if (ruta) toast(`Archivo guardado en: ${ruta}`, 'success');
+    } catch (e: any) {
+      toast(e?.response?.data?.error || 'No se pudo exportar el listado', 'error');
+    } finally {
+      setExportando(false);
+    }
+  };
 
   const imprimirResumen = (formato: 'detallado' | 'corto') => {
     const clienteNombre = filtros.clienteId
@@ -155,7 +210,7 @@ export default function PedidosPage() {
         eyebrow="Operacion"
         title="Pedidos"
         description="Vista central para revisar estados, saldos y avance de cada orden."
-        meta={<Badge tone="info" outline>{pedidosFiltrados.length} registros</Badge>}
+        meta={<Badge tone="info" outline>{total} pedido(s) en total</Badge>}
         actions={(
           <>
             <Button
@@ -164,6 +219,14 @@ export default function PedidosPage() {
               onClick={() => setMostrarFiltros((v) => !v)}
             >
               {mostrarFiltros ? 'Ocultar filtros' : 'Filtros avanzados'}
+            </Button>
+            <Button
+              variant="secondary"
+              leftIcon={<Download size={15} />}
+              onClick={exportarFiltrados}
+              disabled={exportando || total === 0}
+            >
+              {exportando ? 'Exportando…' : 'Exportar Excel'}
             </Button>
             <Button
               variant="secondary"
@@ -229,7 +292,7 @@ export default function PedidosPage() {
             <input
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
-              placeholder="Buscar por numero, cliente o telefono"
+              placeholder="Buscar por nombre o código"
               className={cn(inputClassName, 'pl-9')}
             />
           </div>
@@ -328,22 +391,23 @@ export default function PedidosPage() {
         </Card>
       )}
 
+      {/* Los totales corresponden a los pedidos VISIBLES en esta página. */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardBody>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ordenado</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ordenado (página)</p>
             <p className="num mt-1 text-xl font-semibold text-slate-950">{moneda(resumen.total)}</p>
           </CardBody>
         </Card>
         <Card>
           <CardBody>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pagado</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pagado (página)</p>
             <p className="num mt-1 text-xl font-semibold text-success-700">{moneda(resumen.pagado)}</p>
           </CardBody>
         </Card>
         <Card>
           <CardBody>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pendiente</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pendiente (página)</p>
             <p className="num mt-1 text-xl font-semibold text-warning-700">{moneda(resumen.pendiente)}</p>
           </CardBody>
         </Card>
@@ -378,8 +442,8 @@ export default function PedidosPage() {
             <TBody>
               {pedidosFiltrados.map((p) => {
                 const total = Number(p.total ?? 0);
-                const pagado = Number(p.totalPagado ?? p.pagado ?? 0);
-                const pendiente = Math.max(0, Number(p.pendiente ?? total - pagado));
+                const pagado = Number(p.totalPagado ?? p.pagado ?? sumaPagos(p));
+                const pendiente = Number(p.pendiente ?? pendienteDePedido(p, pagado));
                 return (
                   <TR
                     key={p.id}
@@ -415,6 +479,58 @@ export default function PedidosPage() {
             </TBody>
           </Table>
         </TableContainer>
+      )}
+
+      {/* Paginación: los filtros y la búsqueda se conservan al cambiar de
+          página porque viven en su propio estado y viajan en cada consulta. */}
+      {total > 0 && (
+        <Card>
+          <CardBody className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3 text-sm text-slate-600">
+              <span>
+                Mostrando <span className="font-semibold text-slate-900">{desdeFila}–{hastaFila}</span>{' '}
+                de <span className="font-semibold text-slate-900">{total}</span> pedidos
+              </span>
+              <span className="text-slate-300">|</span>
+              <label className="flex items-center gap-2">
+                <span className="text-slate-500">Por página</span>
+                <Select
+                  value={String(pageSize)}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="w-24"
+                >
+                  {TAMANOS_PAGINA.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </Select>
+              </label>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<ChevronLeft size={15} />}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={!hasPrevious || isFetching}
+              >
+                Anterior
+              </Button>
+              <span className="text-sm font-semibold text-slate-700">
+                Página {page} de {totalPages}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                rightIcon={<ChevronRight size={15} />}
+                onClick={() => setPage((p) => (hasNext ? p + 1 : p))}
+                disabled={!hasNext || isFetching}
+              >
+                Siguiente
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       <NuevoPedidoModal open={openNuevo} onClose={() => setOpenNuevo(false)} />

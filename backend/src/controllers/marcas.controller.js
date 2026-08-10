@@ -108,6 +108,31 @@ exports.crear = asyncHandler(async (req, res) => {
   const data  = construirCrear(clean);
   const usuarioId = await resolverUsuarioId(req);
 
+  /* Dedupe por nombre: marcas creadas offline en varios dispositivos (o
+   * reintentos sin la misma metadata) no deben duplicar el catálogo. Si ya
+   * existe una marca activa con el mismo nombre (collation CI), la reutilizamos
+   * y registramos la operación para idempotencia. */
+  const existentePorNombre = await prisma.marca.findFirst({
+    where:   { deletedAt: null, nombre: data.nombre },
+    include: MARCA_INCLUDE
+  });
+  if (existentePorNombre) {
+    if (meta) {
+      try {
+        await createOperation(prisma, meta, {
+          entityType:  'MARCA',
+          entityId:    existentePorNombre.id,
+          action:      'CREATE',
+          payloadHash: payloadHash(clean)
+        });
+      } catch (e) {
+        console.warn('[marcas.crear] no se pudo registrar idempotencia de marca existente:', e?.message);
+      }
+    }
+    console.log('[marcas.crear] dedupe por nombre →', existentePorNombre.id);
+    return res.status(200).json(existentePorNombre);
+  }
+
   const marca = await prisma.$transaction(async (tx) => {
     const creada = await tx.marca.create({
       data: { ...data, creadoPorId: usuarioId, actualizadoPorId: usuarioId },

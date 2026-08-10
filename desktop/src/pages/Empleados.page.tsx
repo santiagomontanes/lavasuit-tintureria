@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import {
-  ArrowLeft, Banknote, CreditCard, PackageCheck, Pencil, Plus, RefreshCw,
+  ArrowLeft, Banknote, CreditCard, PackageCheck, Pencil, Plus, Receipt, RefreshCw,
   ShieldAlert, ShoppingBag, UserRound, Users, UserCog, CheckCircle2
 } from 'lucide-react';
 import api from '../services/api';
@@ -63,8 +63,8 @@ interface Evento {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const moneda = (v: number) =>
-  `S/ ${Number(v ?? 0).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+import { formatCurrencyCOP } from '../lib/currency';
+const moneda = formatCurrencyCOP;
 
 type Preset = 'hoy' | 'semana' | 'mes' | 'total';
 
@@ -109,6 +109,7 @@ const TIPO_CFG: Record<string, { label: string; icon: React.ReactNode; cls: stri
   CAJA_APERTURA:      { label: 'Caja abierta',         icon: <Banknote     size={13} />, cls: 'bg-cyan-50    text-cyan-700    ring-cyan-100'    },
   CAJA_CIERRE:        { label: 'Caja cerrada',         icon: <Banknote     size={13} />, cls: 'bg-slate-100  text-slate-600   ring-slate-200'   },
   PEDIDO_ENTREGADO:   { label: 'Pedido entregado',     icon: <PackageCheck size={13} />, cls: 'bg-success-50 text-success-700 ring-success-100' },
+  GASTO:              { label: 'Gasto',                icon: <Receipt      size={13} />, cls: 'bg-orange-50  text-orange-700  ring-orange-100'  },
 };
 
 // ─── Subcomponente: item de timeline ─────────────────────────────────────────
@@ -150,6 +151,47 @@ function EventoItem({ ev, onPedido }: { ev: Evento; onPedido?: (id: string) => v
               {moneda(ev.monto)}
             </span>
           )}
+          {/* Detalle de un gasto: categoria, metodo, sesion de caja y, en las
+              ediciones, el valor anterior y el nuevo. */}
+          {ev.tipo === 'GASTO' && ev.extra?.categoria && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700">
+              {ev.extra.categoria}
+            </span>
+          )}
+          {ev.tipo === 'GASTO' && ev.extra?.metodoPago && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-info-50 text-info-700">
+              {ev.extra.metodoPago}
+            </span>
+          )}
+          {ev.tipo === 'GASTO' && ev.extra?.accion && ev.extra.accion !== 'CREADO' && (
+            <span className={cn(
+              'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold',
+              ev.extra.accion === 'ANULADO' ? 'bg-danger-50 text-danger-700' : 'bg-warning-50 text-warning-700'
+            )}>
+              {ev.extra.accion}
+            </span>
+          )}
+          {ev.tipo === 'GASTO' && ev.extra?.valorAnterior && ev.extra?.valorNuevo && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-warning-50 text-warning-700 font-mono">
+              {ev.extra.valorAnterior} → {ev.extra.valorNuevo}
+            </span>
+          )}
+          {ev.tipo === 'GASTO' && ev.extra?.anulado && ev.extra?.accion === 'CREADO' && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-danger-50 text-danger-700">
+              anulado despues
+            </span>
+          )}
+          {ev.tipo === 'GASTO' && ev.extra?.cajaApertura && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-cyan-50 text-cyan-700">
+              Caja del {dayjs(ev.extra.cajaApertura).format('DD/MM/YYYY')}
+            </span>
+          )}
+          {ev.tipo === 'GASTO' && ev.extra?.motivo && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-600">
+              Motivo: {ev.extra.motivo}
+            </span>
+          )}
+
           {ev.extra?.estadoAnterior != null && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-warning-50 text-warning-700">
               {ev.extra.estadoAnterior} → {ev.extra.estadoNuevo}
