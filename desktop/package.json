@@ -1,6 +1,6 @@
 {
   "name": "lavasuit-desktop",
-  "version": "1.0.2",
+  "version": "1.0.1-test.8",
   "description": "LavaSuit administración - aplicación Windows",
   "main": "electron/main.js",
   "author": "LavaSuit",
